@@ -8,6 +8,8 @@ import tokenRoutes from "./routes/token.routes";
 import queueRoutes from "./routes/queue.routes";
 import userRoutes from "./routes/user.routes";
 import adminRoutes from "./routes/admin.routes";
+import authRoutes from "./routes/auth.routes";
+import searchRoutes from "./routes/search.routes";
 import { bootstrapDb, checkDbHealth } from "./bootstrapDb";
 import { formatError, getDatabaseUrlHint } from "./utils/formatError";
 import "./events/queueSubscriber";
@@ -52,6 +54,8 @@ app.get("/setup-db", async (_req, res) => {
   }
 });
 
+app.use("/auth", authRoutes);
+app.use("/search", searchRoutes);
 app.use("/patient", patientRoutes);
 app.use("/token", tokenRoutes);
 app.use("/queue", queueRoutes);

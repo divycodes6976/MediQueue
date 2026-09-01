@@ -3,79 +3,48 @@
 import axios from "axios";
 import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   Activity,
   AlertTriangle,
-  Building2,
   Crown,
   Hash,
   Phone,
   Plus,
-  RefreshCw,
   Sparkles,
-  Stethoscope,
   Ticket,
   User,
 } from "lucide-react";
-
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001").replace(
-  /\/$/,
-  ""
-);
-
-type Priority = "Normal" | "Senior" | "Emergency";
-type Status = "Waiting" | "Done";
+import { Badge, priorityBadgeVariant } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Input } from "@/components/ui/Input";
+import { Select } from "@/components/ui/Select";
+import { Textarea } from "@/components/ui/Textarea";
+import { useToast } from "@/contexts/ToastContext";
+import { api } from "@/lib/api";
+import {
+  apiToUiPriority,
+  CODE_TO_DEPARTMENT_VALUE,
+  DEPARTMENTS,
+  type Priority,
+  priorityToApi,
+  PRIORITIES,
+} from "@/lib/constants";
+import { cn } from "@/lib/cn";
 
 type Token = {
   code: string;
   name: string;
   department: string;
-  room: string;
   priority: Priority;
-  status: Status;
-};
-
-type DepartmentOption = {
-  label: string;
-  value: string;
-  code: string;
 };
 
 type TriageSuggestion = {
   department: string;
   priority: string;
   reason: string;
-};
-
-const DEPARTMENTS: DepartmentOption[] = [
-  { label: "Orthopedic", value: "Orthopedic", code: "ORTH" },
-  { label: "Dental", value: "Dental", code: "DENT" },
-  { label: "Cardiology", value: "Cardiology", code: "CARD" },
-  { label: "Neurology", value: "Neurology", code: "NEUR" },
-  { label: "General Medicine", value: "General Medicine", code: "GEN" },
-];
-
-const CODE_TO_DEPARTMENT_VALUE: Record<string, string> = {
-  DENT: "Dental",
-  ORTH: "Orthopedic",
-  CARD: "Cardiology",
-  NEUR: "Neurology",
-  GEN: "General Medicine",
-};
-
-const PRIORITIES: Priority[] = ["Normal", "Senior", "Emergency"];
-
-const priorityToApi = (p: Priority): string => {
-  if (p === "Emergency") return "EMERGENCY";
-  if (p === "Senior") return "SENIOR";
-  return "NORMAL";
-};
-
-const apiToUiPriority = (raw: string): Priority => {
-  const u = raw.toUpperCase();
-  if (u === "EMERGENCY") return "Emergency";
-  if (u === "SENIOR") return "Senior";
-  return "Normal";
 };
 
 const initialFormState = {
@@ -87,17 +56,6 @@ const initialFormState = {
   priority: "Normal" as Priority,
 };
 
-const getPriorityClass = (priority: Priority) => {
-  if (priority === "Emergency") return "bg-red-100 text-red-600";
-  if (priority === "Senior") return "bg-yellow-100 text-yellow-600";
-  return "bg-blue-100 text-blue-600";
-};
-
-const getStatusClass = (status: Status) => {
-  if (status === "Done") return "bg-green-100 text-green-600";
-  return "bg-gray-100 text-gray-600";
-};
-
 const getPriorityIcon = (priority: Priority) => {
   if (priority === "Emergency") return <AlertTriangle className="h-3.5 w-3.5" />;
   if (priority === "Senior") return <Crown className="h-3.5 w-3.5" />;
@@ -105,6 +63,7 @@ const getPriorityIcon = (priority: Priority) => {
 };
 
 export default function ReceptionPage() {
+  const { toast } = useToast();
   const [tokens, setTokens] = useState<Token[]>([]);
   const [formData, setFormData] = useState(initialFormState);
   const [isSubmitted, setIsSubmitted] = useState(false);
@@ -117,6 +76,7 @@ export default function ReceptionPage() {
   const [suggestSource, setSuggestSource] = useState<"ai" | "rules" | null>(null);
   const [emergencyWarning, setEmergencyWarning] = useState(false);
   const [seniorHint, setSeniorHint] = useState(false);
+  const [lastToken, setLastToken] = useState<Token | null>(null);
 
   const departmentMap = useMemo(
     () =>
@@ -153,12 +113,12 @@ export default function ReceptionPage() {
 
     setIsSuggesting(true);
     try {
-      const { data } = await axios.post<{
+      const { data } = await api.post<{
         suggestion: TriageSuggestion;
         source: "ai" | "rules";
         emergencyWarning: boolean;
         seniorHint: boolean;
-      }>(`${API_BASE}/patient/suggest`, {
+      }>("/patient/suggest", {
         chiefComplaint: complaint,
         age: parsedAge,
       });
@@ -168,6 +128,7 @@ export default function ReceptionPage() {
       setEmergencyWarning(data.emergencyWarning);
       setSeniorHint(data.seniorHint);
       applySuggestion(data.suggestion);
+      toast("AI suggestion received", "success");
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
         const d = err.response?.data as { message?: string; error?: string } | undefined;
@@ -175,6 +136,7 @@ export default function ReceptionPage() {
       } else {
         setSuggestError("AI suggest failed.");
       }
+      toast("AI suggestion failed", "error");
     } finally {
       setIsSuggesting(false);
     }
@@ -205,11 +167,11 @@ export default function ReceptionPage() {
     setIsSubmitting(true);
 
     try {
-      const { data } = await axios.post<{
+      const { data } = await api.post<{
         message?: string;
         patient: { name: string };
         token: { tokenNumber: string; status: string; priority: string };
-      }>(`${API_BASE}/patient/register`, {
+      }>("/patient/register", {
         name: formData.name.trim(),
         age: parsedAge,
         phone: formData.phone.trim(),
@@ -218,17 +180,15 @@ export default function ReceptionPage() {
         priority: priorityToApi(formData.priority),
       });
 
-      const roomNumber = (tokens.length % 12) + 1;
       const newToken: Token = {
         code: data.token.tokenNumber,
         name: data.patient.name,
         department: formData.department,
-        room: `Room ${roomNumber}`,
         priority: apiToUiPriority(data.token.priority),
-        status: "Waiting",
       };
 
       setTokens((prev) => [...prev, newToken]);
+      setLastToken(newToken);
       setFormData(initialFormState);
       setTouched({});
       setIsSubmitted(false);
@@ -236,6 +196,7 @@ export default function ReceptionPage() {
       setSuggestSource(null);
       setEmergencyWarning(false);
       setSeniorHint(false);
+      toast(`Token ${newToken.code} generated`, "success");
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
         const data = err.response?.data as { message?: string; error?: string } | undefined;
@@ -246,221 +207,236 @@ export default function ReceptionPage() {
       } else {
         setSubmitError("Failed to register patient.");
       }
+      toast("Registration failed", "error");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const toggleStatus = (code: string) => {
-    setTokens((prev) =>
-      prev.map((token) =>
-        token.code === code
-          ? { ...token, status: token.status === "Waiting" ? "Done" : "Waiting" }
-          : token
-      )
-    );
-  };
-
   const hasError = (field: keyof typeof initialFormState) =>
     (isSubmitted || touched[field]) && !String(formData[field]).trim();
 
-  const baseInputClass =
-    "h-11 w-full rounded-xl border bg-white text-sm text-gray-800 placeholder:text-gray-400 outline-none transition-all duration-200 focus:border-transparent focus:ring-2 focus:ring-teal-400";
-
   return (
-    <main className="min-h-[calc(100vh-70px)] bg-slate-50 px-4 py-8 sm:px-6 lg:px-8">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-10">
-        <section className="mb-1">
-          <h1 className="text-3xl font-semibold tracking-tight text-gray-900 sm:text-4xl">
-            Reception — Patient Registration
-          </h1>
-          <p className="mt-2 text-sm text-gray-500">
-            Patient counter: register, AI Suggestion, confirm, then issue token.
-          </p>
-        </section>
-
-        <section className="grid gap-6 lg:grid-cols-2">
-          <article className="rounded-2xl border border-gray-100 bg-white p-6 shadow-md transition-all duration-200 hover:shadow-lg sm:p-8">
-            <h2 className="flex items-center gap-2 text-lg font-medium text-gray-900">
-              <Ticket className="h-5 w-5 text-gray-400" />
-              New patient (reception desk)
-            </h2>
-
-            <form className="mt-6 space-y-5" onSubmit={handleGenerateToken}>
-              <div>
-                <label htmlFor="patient-name" className="mb-2 block text-sm font-medium text-gray-700">
-                  Patient Name <span className="text-red-500">*</span>
-                </label>
-                <div className="relative">
-                  <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                  <input
-                    id="patient-name"
-                    value={formData.name}
-                    onChange={(e) => setFormData((prev) => ({ ...prev, name: e.target.value }))}
-                    onBlur={() => setTouched((prev) => ({ ...prev, name: true }))}
-                    placeholder="e.g. Amit Singh"
-                    className={`${baseInputClass} pl-10 pr-4 ${
-                      hasError("name") ? "border-red-300" : "border-gray-200"
-                    }`}
-                    required
-                  />
-                </div>
-                {hasError("name") && (
-                  <p className="mt-1 text-xs text-red-500">This field is required</p>
-                )}
+    <div className="space-y-7 pb-4">
+      <motion.section
+        initial={{ opacity: 0, y: -8 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="relative overflow-hidden rounded-2xl border border-slate-200/90 bg-[linear-gradient(110deg,#fff_0%,#f8fbff_68%,#fafaff_100%)] px-5 py-6 shadow-[0_1px_2px_rgb(15_23_42_/_0.03)] sm:px-7"
+      >
+        <div className="pointer-events-none absolute -right-12 -top-16 h-44 w-44 rounded-full bg-blue-200/15 blur-3xl" />
+        <div className="relative flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <div className="mb-3 flex items-center gap-2">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm shadow-blue-600/20">
+                <User className="h-4 w-4" />
+              </span>
+              <span className="text-[12px] font-semibold uppercase tracking-[0.14em] text-blue-700">Reception workspace</span>
+            </div>
+            <h1 className="text-[30px] font-semibold tracking-[-0.035em] text-slate-900 sm:text-[34px]">Patient Registration</h1>
+            <p className="mt-2 text-sm leading-6 text-slate-600">Create a queue token with patient details and an optional triage recommendation.</p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-center text-xs sm:min-w-[340px]">
+            {[
+              ["1", "Patient details"],
+              ["2", "Triage review"],
+              ["3", "Issue token"],
+            ].map(([step, label]) => (
+              <div key={step} className="rounded-xl border border-slate-200/80 bg-white/80 px-3 py-2.5 shadow-[0_1px_2px_rgb(15_23_42_/_0.02)]">
+                <span className="block font-semibold text-blue-600">{step}</span>
+                <span className="mt-0.5 block text-slate-500">{label}</span>
               </div>
+            ))}
+          </div>
+        </div>
+      </motion.section>
+
+      <AnimatePresence>
+        {lastToken && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: -20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="relative overflow-hidden rounded-2xl border border-blue-200 bg-gradient-to-br from-blue-600 to-blue-700 p-8 text-center text-white shadow-xl"
+          >
+            <button
+              type="button"
+              onClick={() => setLastToken(null)}
+              className="absolute right-4 top-4 rounded-lg bg-white/10 px-2 py-1 text-xs transition hover:bg-white/20"
+            >
+              Dismiss
+            </button>
+            <p className="text-sm font-medium text-blue-100">Token Generated Successfully</p>
+            <motion.p
+              initial={{ scale: 0.5 }}
+              animate={{ scale: 1 }}
+              transition={{ type: "spring", stiffness: 200, damping: 15 }}
+              className="mt-2 text-5xl font-bold tracking-tight sm:text-6xl"
+            >
+              {lastToken.code}
+            </motion.p>
+            <p className="mt-3 text-lg font-medium">{lastToken.name}</p>
+            <p className="mt-1 text-sm text-blue-100">
+              {lastToken.department}
+            </p>
+            <Badge variant={priorityBadgeVariant(lastToken.priority)} className="mt-4 bg-white/20 text-white ring-white/30">
+              {lastToken.priority}
+            </Badge>
+            <div className="mt-6">
+              <Link
+                href={`/track/${encodeURIComponent(lastToken.code)}`}
+                className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-blue-700 shadow-sm transition hover:bg-blue-50"
+              >
+                View Patient Queue Link →
+              </Link>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <section className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(340px,0.8fr)]">
+        <div className="space-y-6">
+          <Card id="ai-triage" className="overflow-hidden border-slate-200/90" padding="none">
+            <div className="border-b border-slate-100 bg-slate-50/55 px-5 py-5 sm:px-6">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-100">
+                  <Ticket className="h-4 w-4 text-violet-600" />
+                </div>
+                <div>
+                  <CardTitle>Patient Information</CardTitle>
+                  <CardDescription>Enter patient details at the reception desk</CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            </div>
+
+            <form className="space-y-5 p-5 sm:p-6" onSubmit={handleGenerateToken}>
+              <Input
+                label="Patient Name"
+                value={formData.name}
+                onChange={(e) => setFormData((prev) => ({ ...prev, name: e.target.value }))}
+                onBlur={() => setTouched((prev) => ({ ...prev, name: true }))}
+                placeholder="e.g. Amit Singh"
+                icon={<User className="h-4 w-4" />}
+                error={hasError("name") ? "This field is required" : undefined}
+                required
+              />
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div>
-                  <label htmlFor="patient-age" className="mb-2 block text-sm font-medium text-gray-700">
-                    Age <span className="text-red-500">*</span>
-                  </label>
-                  <div className="relative">
-                    <Hash className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                    <input
-                      id="patient-age"
-                      type="number"
-                      min={0}
-                      value={formData.age}
-                      onChange={(e) => setFormData((prev) => ({ ...prev, age: e.target.value }))}
-                      onBlur={() => setTouched((prev) => ({ ...prev, age: true }))}
-                      placeholder="34"
-                      className={`${baseInputClass} pl-10 pr-4 ${
-                        hasError("age") ? "border-red-300" : "border-gray-200"
-                      }`}
-                      required
-                    />
-                  </div>
-                  {hasError("age") && (
-                    <p className="mt-1 text-xs text-red-500">This field is required</p>
-                  )}
-                </div>
-
-                <div>
-                  <label htmlFor="patient-phone" className="mb-2 block text-sm font-medium text-gray-700">
-                    Phone <span className="text-red-500">*</span>
-                  </label>
-                  <div className="relative">
-                    <Phone className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                    <input
-                      id="patient-phone"
-                      value={formData.phone}
-                      onChange={(e) => setFormData((prev) => ({ ...prev, phone: e.target.value }))}
-                      onBlur={() => setTouched((prev) => ({ ...prev, phone: true }))}
-                      placeholder="+91..."
-                      className={`${baseInputClass} pl-10 pr-4 ${
-                        hasError("phone") ? "border-red-300" : "border-gray-200"
-                      }`}
-                      required
-                    />
-                  </div>
-                  {hasError("phone") && (
-                    <p className="mt-1 text-xs text-red-500">This field is required</p>
-                  )}
-                </div>
+                <Input
+                  label="Age"
+                  type="number"
+                  min={0}
+                  value={formData.age}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, age: e.target.value }))}
+                  onBlur={() => setTouched((prev) => ({ ...prev, age: true }))}
+                  placeholder="34"
+                  icon={<Hash className="h-4 w-4" />}
+                  error={hasError("age") ? "This field is required" : undefined}
+                  required
+                />
+                <Input
+                  label="Phone"
+                  value={formData.phone}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, phone: e.target.value }))}
+                  onBlur={() => setTouched((prev) => ({ ...prev, phone: true }))}
+                  placeholder="+91..."
+                  icon={<Phone className="h-4 w-4" />}
+                  error={hasError("phone") ? "This field is required" : undefined}
+                  required
+                />
               </div>
 
               <div>
-                <label
-                  htmlFor="chief-complaint"
-                  className="mb-2 block text-sm font-medium text-gray-700"
-                >
-                  Patient problem (chief complaint) <span className="text-red-500">*</span>
-                </label>
-                <div className="relative">
-                  <Stethoscope className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-gray-400" />
-                  <textarea
-                    id="chief-complaint"
-                    rows={3}
-                    value={formData.chiefComplaint}
-                    onChange={(e) => {
-                      setFormData((prev) => ({ ...prev, chiefComplaint: e.target.value }));
-                      setAiSuggestion(null);
-                      setSuggestSource(null);
-                    }}
-                    onBlur={() => setTouched((prev) => ({ ...prev, chiefComplaint: true }))}
-                    placeholder="e.g. daant me 3 din se dard, khana khaate waqt badhta hai"
-                    className={`min-h-[88px] w-full resize-y rounded-xl border bg-white py-2.5 pl-10 pr-4 text-sm text-gray-800 placeholder:text-gray-400 outline-none transition-all focus:ring-2 focus:ring-teal-400 ${
-                      hasError("chiefComplaint") ? "border-red-300" : "border-gray-200"
-                    }`}
-                    required
-                  />
-                </div>
-                {hasError("chiefComplaint") && (
-                  <p className="mt-1 text-xs text-red-500">Patient problem is required</p>
-                )}
-
-                <button
+                <Textarea
+                  label="Chief Complaint"
+                  rows={3}
+                  value={formData.chiefComplaint}
+                  onChange={(e) => {
+                    setFormData((prev) => ({ ...prev, chiefComplaint: e.target.value }));
+                    setAiSuggestion(null);
+                    setSuggestSource(null);
+                  }}
+                  onBlur={() => setTouched((prev) => ({ ...prev, chiefComplaint: true }))}
+                  placeholder="e.g. daant me 3 din se dard, khana khaate waqt badhta hai"
+                  error={hasError("chiefComplaint") ? "Patient problem is required" : undefined}
+                  required
+                />
+                <Button
                   type="button"
+                  variant="outline"
+                  size="sm"
                   onClick={() => void handleAiSuggest()}
                   disabled={isSuggesting || !formData.chiefComplaint.trim()}
-                  className="mt-3 inline-flex h-10 items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-4 text-sm font-medium text-violet-800 transition hover:bg-violet-100 disabled:opacity-50"
+                  loading={isSuggesting}
+                  className="mt-3 border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100"
                 >
                   <Sparkles className="h-4 w-4" />
-                  {isSuggesting ? "Suggesting…" : "AI Suggestion"}
-                </button>
-                {suggestError && (
-                  <p className="mt-2 text-xs text-red-600">{suggestError}</p>
-                )}
+                  {isSuggesting ? "Analyzing…" : "AI Suggestion"}
+                </Button>
+                {suggestError && <p className="mt-2 text-xs text-red-600">{suggestError}</p>}
               </div>
 
               {aiSuggestion && (
-                <div className="rounded-xl border border-violet-100 bg-violet-50/80 px-4 py-3 text-sm text-violet-900">
-                  <p className="font-medium">
-                    Suggested ({suggestSource === "ai" ? "Gemini" : "rules"}):{" "}
-                    {CODE_TO_DEPARTMENT_VALUE[aiSuggestion.department] ?? aiSuggestion.department}{" "}
-                    · {apiToUiPriority(aiSuggestion.priority)}
-                  </p>
-                  <p className="mt-1 text-violet-800/90">{aiSuggestion.reason}</p>
-                  <p className="mt-2 text-xs text-violet-700">
-                    Reception confirms below — change if needed.
-                  </p>
-                </div>
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="rounded-xl border border-violet-200/90 bg-[linear-gradient(120deg,#faf5ff_0%,#f7f7ff_100%)] p-4"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-100">
+                      <Sparkles className="h-4 w-4 text-violet-600" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-violet-900">
+                        AI Suggestion ({suggestSource === "ai" ? "Gemini" : "Rules"})
+                      </p>
+                      <p className="mt-1 text-sm text-violet-800">
+                        {CODE_TO_DEPARTMENT_VALUE[aiSuggestion.department] ?? aiSuggestion.department}{" "}
+                        · {apiToUiPriority(aiSuggestion.priority)}
+                      </p>
+                      <p className="mt-2 text-sm text-violet-700/90">{aiSuggestion.reason}</p>
+                      <p className="mt-3 text-xs leading-5 text-violet-700">
+                        Review this recommendation before generating the token. Reception can update either field below.
+                      </p>
+                    </div>
+                  </div>
+                </motion.div>
               )}
 
               {emergencyWarning && (
-                <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-800">
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
                   Emergency suggested — please confirm priority with reception.
-                </p>
+                </div>
               )}
               {seniorHint && !emergencyWarning && (
-                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                   Age 60+ — Senior priority suggested. Confirm below.
-                </p>
+                </div>
               )}
 
-              <div>
-                <label htmlFor="department" className="mb-2 block text-sm font-medium text-gray-700">
-                  Send to department (reception confirms) <span className="text-red-500">*</span>
-                </label>
-                <div className="relative">
-                  <Building2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                  <select
-                    id="department"
-                    value={formData.department}
-                    onChange={(e) => setFormData((prev) => ({ ...prev, department: e.target.value }))}
-                    onBlur={() => setTouched((prev) => ({ ...prev, department: true }))}
-                    className={`${baseInputClass} pl-10 pr-10 text-gray-700 ${
-                      hasError("department") ? "border-red-300" : "border-gray-200"
-                    }`}
-                    required
-                  >
-                    <option value="">Select department</option>
-                    {DEPARTMENTS.map((department) => (
-                      <option key={department.value} value={department.value}>
-                        {department.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                {hasError("department") && (
-                  <p className="mt-1 text-xs text-red-500">This field is required</p>
-                )}
-              </div>
+              <Select
+                label="Department"
+                value={formData.department}
+                onChange={(e) => setFormData((prev) => ({ ...prev, department: e.target.value }))}
+                onBlur={() => setTouched((prev) => ({ ...prev, department: true }))}
+                error={hasError("department") ? "This field is required" : undefined}
+                required
+              >
+                <option value="">Select department</option>
+                {DEPARTMENTS.map((department) => (
+                  <option key={department.value} value={department.value}>
+                    {department.label}
+                  </option>
+                ))}
+              </Select>
 
               <div>
-                <p className="mb-2 text-sm font-medium text-gray-700">Priority (reception confirms)</p>
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium text-slate-700">Priority</p>
+                  <span className="text-xs text-slate-400">Reception can override this choice</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
                   {PRIORITIES.map((priority) => {
                     const isSelected = formData.priority === priority;
                     return (
@@ -468,21 +444,14 @@ export default function ReceptionPage() {
                         key={priority}
                         type="button"
                         onClick={() => setFormData((prev) => ({ ...prev, priority }))}
-                        className={`rounded-full border px-4 py-2 text-sm font-medium transition-all duration-200 ${
+                        className={cn(
+                          "inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition-all duration-200",
                           isSelected
-                            ? "border-teal-300 bg-teal-50 text-teal-700"
-                            : "border-gray-200 bg-white text-gray-600 hover:bg-gray-100"
-                        }`}
+                            ? "border-blue-300 bg-blue-50 text-blue-700 shadow-sm"
+                            : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+                        )}
                       >
-                        <span className="mr-2 inline-flex align-middle">
-                          {priority === "Emergency" ? (
-                            <AlertTriangle className="h-4 w-4" />
-                          ) : priority === "Senior" ? (
-                            <Crown className="h-4 w-4" />
-                          ) : (
-                            <User className="h-4 w-4" />
-                          )}
-                        </span>
+                        {getPriorityIcon(priority)}
                         {priority}
                       </button>
                     );
@@ -490,90 +459,96 @@ export default function ReceptionPage() {
                 </div>
               </div>
 
+              {formData.department && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="rounded-xl border border-dashed border-blue-200 bg-blue-50/50 p-4 text-center"
+                >
+                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Token Preview</p>
+                  <p className="mt-1 text-2xl font-bold text-blue-600">
+                    {departmentMap[formData.department] ?? "GEN"}-###
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">{formData.department}</p>
+                  <Badge variant={priorityBadgeVariant(formData.priority)} className="mt-2">
+                    {formData.priority}
+                  </Badge>
+                </motion.div>
+              )}
+
               {submitError && (
-                <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                   {submitError}
-                </p>
-              )}
-
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-linear-to-r from-teal-500 to-emerald-500 text-sm font-semibold text-white shadow-md transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-70"
-              >
-                <Plus className="h-4 w-4" />
-                {isSubmitting ? "Saving…" : "Generate Token"}
-              </button>
-            </form>
-          </article>
-
-          <article className="rounded-2xl border border-gray-100 bg-white p-6 shadow-md transition-all duration-200 hover:shadow-lg sm:p-8">
-            <h2 className="flex items-center gap-2 text-lg font-medium text-gray-900">
-              <Activity className="h-5 w-5 text-gray-400" />
-              Today&apos;s tokens ({tokens.length})
-            </h2>
-
-            <div className="mt-5 max-h-[560px] space-y-3 overflow-y-auto pr-1">
-              {tokens.length === 0 ? (
-                <div className="flex min-h-56 flex-col items-center justify-center rounded-2xl border border-dashed border-gray-200 p-6 text-center text-sm text-gray-500">
-                  <Activity className="mb-3 h-6 w-6 text-gray-400" />
-                  <p className="font-medium text-gray-600">No tokens yet</p>
-                  <p className="mt-1 text-xs text-gray-500">Generated tokens will appear here</p>
                 </div>
-              ) : (
-                tokens.map((token) => (
-                  <div
-                    key={token.code}
-                    className="flex flex-col gap-3 rounded-xl border border-gray-100 bg-white p-4 transition-all duration-200 hover:bg-gray-50 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div>
-                      <p className="text-base font-semibold text-teal-600">{token.code}</p>
-                      <p className="text-lg font-medium text-gray-800">{token.name}</p>
-                      <p className="text-sm text-gray-500">
-                        {token.department} · {token.room}
-                      </p>
-                      <Link
-                        href={`/track/${encodeURIComponent(token.code)}`}
-                        className="mt-2 inline-block text-xs font-medium text-violet-700 hover:underline"
-                      >
-                        Patient queue link →
-                      </Link>
-                    </div>
-
-                    <div className="flex items-center gap-2 self-start sm:self-center">
-                      <span
-                        className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium ${getPriorityClass(
-                          token.priority
-                        )}`}
-                      >
-                        {getPriorityIcon(token.priority)}
-                        {token.priority}
-                      </span>
-
-                      <span
-                        className={`rounded-full px-3 py-1 text-xs font-medium ${getStatusClass(
-                          token.status
-                        )}`}
-                      >
-                        {token.status}
-                      </span>
-
-                      <button
-                        type="button"
-                        onClick={() => toggleStatus(token.code)}
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-gray-200 text-gray-500 transition-all duration-200 hover:bg-gray-100 hover:text-gray-700"
-                        aria-label="Toggle token status"
-                      >
-                        <RefreshCw className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                ))
               )}
+
+              <motion.div whileHover={{ scale: 1.005 }} whileTap={{ scale: 0.99 }} className="border-t border-slate-100 pt-5">
+                <Button type="submit" size="lg" loading={isSubmitting} className="w-full">
+                  <Plus className="h-4 w-4" />
+                  {isSubmitting ? "Generating Token…" : "Generate Token"}
+                </Button>
+              </motion.div>
+            </form>
+          </Card>
+        </div>
+
+        <Card className="sticky top-24 overflow-hidden border-slate-200/90" padding="none">
+          <div className="border-b border-slate-100 bg-[linear-gradient(120deg,#fff_0%,#f8fffc_100%)] p-5">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-100">
+                <Activity className="h-4 w-4 text-emerald-600" />
+              </div>
+              <div>
+                <CardTitle>Today&apos;s Tokens</CardTitle>
+                <CardDescription>{tokens.length} tokens issued</CardDescription>
+              </div>
             </div>
-          </article>
-        </section>
-      </div>
-    </main>
+          </CardHeader>
+          </div>
+
+          <div className="max-h-[640px] space-y-3 overflow-y-auto p-5 pr-4">
+            {tokens.length === 0 ? (
+              <EmptyState
+                icon={Ticket}
+                title="Ready for the next patient"
+                description="Generated tokens will appear here as a clear, shareable queue record."
+                className="min-h-[310px] border-blue-100 bg-[radial-gradient(circle_at_50%_0%,#eff6ff_0%,#fff_58%)]"
+              />
+            ) : (
+              tokens.map((token, i) => (
+                <motion.div
+                  key={token.code}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.03 }}
+                  className="flex flex-col gap-3 rounded-xl border border-slate-200/80 bg-white p-4 shadow-[0_1px_2px_rgb(15_23_42_/_0.02)] transition hover:border-blue-200 hover:bg-blue-50/[0.18] sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div>
+                    <p className="text-base font-bold text-blue-600">{token.code}</p>
+                    <p className="text-sm font-medium text-slate-800">{token.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {token.department}
+                    </p>
+                    <Link
+                      href={`/track/${encodeURIComponent(token.code)}`}
+                      className="mt-2 inline-block text-xs font-medium text-violet-600 hover:underline"
+                    >
+                      Patient queue link →
+                    </Link>
+                  </div>
+                  <div className="flex items-center gap-2 self-start sm:self-center">
+                    <Badge variant={priorityBadgeVariant(token.priority)}>
+                      {getPriorityIcon(token.priority)}
+                      {token.priority}
+                    </Badge>
+                  </div>
+                </motion.div>
+              ))
+            )}
+          </div>
+        </Card>
+      </section>
+    </div>
   );
 }

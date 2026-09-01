@@ -4,8 +4,11 @@ import { integer, pgTable, serial, timestamp, varchar } from "drizzle-orm/pg-cor
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   name: varchar("name", { length: 255 }).notNull(),
+  email: varchar("email", { length: 255 }).unique(),
+  passwordHash: varchar("password_hash", { length: 255 }),
   role: varchar("role", { length: 255 }).notNull(),
   department: varchar("department", { length: 255 }),
+  status: varchar("status", { length: 32 }).notNull().default("active"),
 });
 
 export type User = InferSelectModel<typeof users>;
@@ -33,6 +36,6 @@ export const logs = pgTable("logs", {
   id: serial("id").primaryKey(),
   tokenId: integer("token_id").references(() => tokens.id),
   issueTime: timestamp("issue_time").notNull(),
-  callTime: timestamp("call_time").notNull(),
-  endTime: timestamp("end_time").notNull(),
+  callTime: timestamp("call_time"),
+  endTime: timestamp("end_time"),
 });

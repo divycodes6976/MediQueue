@@ -7,8 +7,11 @@ const SETUP_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS "users" (
     "id" serial PRIMARY KEY NOT NULL,
     "name" varchar(255) NOT NULL,
+    "email" varchar(255),
+    "password_hash" varchar(255),
     "role" varchar(255) NOT NULL,
-    "department" varchar(255)
+    "department" varchar(255),
+    "status" varchar(32) DEFAULT 'active'
   )`,
   `CREATE TABLE IF NOT EXISTS "patients" (
     "id" serial PRIMARY KEY NOT NULL,
@@ -30,12 +33,19 @@ const SETUP_STATEMENTS = [
     "id" serial PRIMARY KEY NOT NULL,
     "token_id" integer,
     "issue_time" timestamp NOT NULL,
-    "call_time" timestamp NOT NULL,
-    "end_time" timestamp NOT NULL
+    "call_time" timestamp,
+    "end_time" timestamp
   )`,
   `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "department" varchar(255)`,
+  `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "email" varchar(255)`,
+  `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "password_hash" varchar(255)`,
+  `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "status" varchar(32) DEFAULT 'active'`,
+  `UPDATE "users" SET "status" = 'active' WHERE "status" IS NULL`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "users_email_unique" ON "users" ("email")`,
   `ALTER TABLE "patients" ADD COLUMN IF NOT EXISTS "phone" varchar(20) DEFAULT ''`,
   `ALTER TABLE "patients" ADD COLUMN IF NOT EXISTS "chief_complaint" varchar(500)`,
+  `ALTER TABLE "logs" ALTER COLUMN "call_time" DROP NOT NULL`,
+  `ALTER TABLE "logs" ALTER COLUMN "end_time" DROP NOT NULL`,
   `ALTER TABLE "tokens" ADD COLUMN IF NOT EXISTS "department" varchar(255) DEFAULT 'GEN'`,
   `ALTER TABLE "tokens" DROP CONSTRAINT IF EXISTS "tokens_doctor_id_users_id_fk"`,
   `ALTER TABLE "tokens" DROP COLUMN IF EXISTS "doctor_id"`,

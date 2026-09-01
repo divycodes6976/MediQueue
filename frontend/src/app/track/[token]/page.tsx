@@ -4,18 +4,21 @@ import axios from "axios";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Loader2 } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  Activity,
+  CheckCircle2,
+  MapPin,
+  Search,
+  Users,
+} from "lucide-react";
+import { Badge } from "@/components/ui/Badge";
+import { Card } from "@/components/ui/Card";
+import { Loader } from "@/components/ui/Loader";
+import { API_BASE } from "@/lib/api";
+import { DEPT_LABELS } from "@/lib/constants";
 import { getWaitingPosition, normalizeQueuePayload, type QueueToken } from "@/lib/queue";
-
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001").replace(/\/$/, "");
-
-const DEPT_LABELS: Record<string, string> = {
-  DENT: "Dental",
-  ORTH: "Orthopedic",
-  CARD: "Cardiology",
-  NEUR: "Neurology",
-  GEN: "General Medicine",
-};
+import { cn } from "@/lib/cn";
 
 type TrackInfo = {
   token: {
@@ -31,6 +34,13 @@ type TrackInfo = {
   patientsAhead: number | null;
   waitingCount: number;
 };
+
+const TIMELINE_STEPS = [
+  { key: "registered", label: "Registered", icon: CheckCircle2 },
+  { key: "waiting", label: "In Queue", icon: Users },
+  { key: "in_progress", label: "Called", icon: Activity },
+  { key: "done", label: "Completed", icon: CheckCircle2 },
+] as const;
 
 export default function TrackTokenPage() {
   const params = useParams();
@@ -95,7 +105,7 @@ export default function TrackTokenPage() {
         if (parsed && typeof parsed === "object" && "msg" in parsed) return;
         setQueueTokens(normalizeQueuePayload(parsed));
       } catch {
-        // ignore malformed SSE payloads
+        // ignore
       }
     };
 
@@ -104,15 +114,6 @@ export default function TrackTokenPage() {
       if (eventSourceRef.current === es) eventSourceRef.current = null;
     };
   }, [department, tokenId]);
-
-  useEffect(() => {
-    return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-        eventSourceRef.current = null;
-      }
-    };
-  }, []);
 
   const position = useMemo(() => {
     if (tokenId == null) return trackInfo?.position ?? null;
@@ -142,60 +143,144 @@ export default function TrackTokenPage() {
     return `${position - 1} patients ahead of you.`;
   })();
 
+  const activeStepIndex = (() => {
+    if (status === "done" || status === "skipped") return 3;
+    if (status === "in_progress") return 2;
+    if (status === "waiting") return 1;
+    return 0;
+  })();
+
   return (
-    <main className="min-h-screen bg-gradient-to-b from-teal-50 to-slate-50 px-4 py-10">
-      <div className="mx-auto w-full max-w-md">
-        <div className="mb-8 flex items-center justify-center gap-2 text-teal-700">
-          <Activity className="h-6 w-6" />
+    <main className="min-h-screen bg-gradient-to-b from-blue-50 via-slate-50 to-white px-4 py-8 sm:py-12">
+      <div className="mx-auto w-full max-w-lg">
+        <div className="mb-8 flex items-center justify-center gap-2">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white">
+            <Activity className="h-5 w-5" />
+          </div>
           <span className="text-lg font-bold text-slate-900">MediQueue</span>
         </div>
 
         {loadError && (
-          <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-6 text-center text-sm text-red-700">
-            {loadError}
-            <Link href="/reception" className="mt-4 block text-teal-700 underline">
-              Back to reception
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="rounded-2xl border border-red-200 bg-red-50 px-6 py-8 text-center"
+          >
+            <p className="text-sm text-red-700">{loadError}</p>
+            <Link
+              href="/track"
+              className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-blue-600 hover:underline"
+            >
+              <Search className="h-4 w-4" />
+              Search another token
             </Link>
-          </div>
+          </motion.div>
         )}
 
-        {!loadError && !trackInfo && (
-          <div className="flex justify-center py-16 text-teal-600">
-            <Loader2 className="h-8 w-8 animate-spin" />
-          </div>
-        )}
+        {!loadError && !trackInfo && <Loader size="lg" label="Loading your token…" className="py-20" />}
 
-        {trackInfo && (
-          <div className="space-y-4">
-            <div className="rounded-2xl border border-teal-100 bg-white p-6 shadow-md">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                Your token
-              </p>
-              <p className="mt-1 text-3xl font-bold text-teal-600">{trackInfo.token.tokenNumber}</p>
-              <p className="mt-2 text-sm text-slate-600">{deptLabel}</p>
-              {trackInfo.token.patientName && (
-                <p className="mt-1 text-sm text-slate-500">{trackInfo.token.patientName}</p>
-              )}
-            </div>
+        <AnimatePresence>
+          {trackInfo && (
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-5"
+            >
+              <Card className="overflow-hidden border-blue-100 p-0">
+                <div className="bg-gradient-to-br from-blue-600 to-blue-700 px-6 py-8 text-center text-white">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-blue-200">
+                    Your Token
+                  </p>
+                  <motion.p
+                    key={trackInfo.token.tokenNumber}
+                    initial={{ scale: 0.8 }}
+                    animate={{ scale: 1 }}
+                    className="mt-2 font-mono text-4xl font-bold tracking-tight sm:text-5xl"
+                  >
+                    {trackInfo.token.tokenNumber}
+                  </motion.p>
+                  <div className="mt-3 flex items-center justify-center gap-2 text-sm text-blue-100">
+                    <MapPin className="h-4 w-4" />
+                    {deptLabel}
+                  </div>
+                  {trackInfo.token.patientName && (
+                    <p className="mt-1 text-sm text-blue-200">{trackInfo.token.patientName}</p>
+                  )}
+                </div>
+              </Card>
 
-            <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-md">
-              {position != null && status === "waiting" && (
-                <p className="text-4xl font-bold text-slate-900">
-                  #{position}
-                  <span className="ml-2 text-base font-medium text-slate-500">in queue</span>
-                </p>
-              )}
-              <p className="mt-3 text-sm text-slate-700">{statusMessage}</p>
-              <p className="mt-2 text-xs text-slate-400">
-                Live updates: {sseStatus === "open" ? "connected" : sseStatus}
-              </p>
-            </div>
+              <div className="grid grid-cols-2 gap-3">
+                {position != null && status === "waiting" && (
+                  <Card className="text-center">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                      Queue Position
+                    </p>
+                    <p className="mt-1 text-3xl font-bold text-slate-900">#{position}</p>
+                  </Card>
+                )}
+              </div>
 
-            <p className="text-center text-xs text-slate-400">
-              Keep this page open for live queue position updates.
-            </p>
-          </div>
-        )}
+              <Card>
+                <p className="text-sm leading-relaxed text-slate-700">{statusMessage}</p>
+                <div className="mt-3 flex items-center gap-2">
+                  <span
+                    className={cn(
+                      "inline-block h-2 w-2 rounded-full",
+                      sseStatus === "open" ? "bg-emerald-500 pulse-ring" : "bg-slate-300"
+                    )}
+                  />
+                  <span className="text-xs text-slate-400">
+                    Live updates: {sseStatus === "open" ? "connected" : sseStatus}
+                  </span>
+                </div>
+              </Card>
+
+              <Card>
+                <p className="mb-4 text-sm font-semibold text-slate-800">Progress Timeline</p>
+                <div className="relative flex justify-between">
+                  <div className="absolute left-4 right-4 top-4 h-0.5 bg-slate-200" />
+                  <motion.div
+                    className="absolute left-4 top-4 h-0.5 bg-blue-500"
+                    initial={{ width: 0 }}
+                    animate={{ width: `${(activeStepIndex / (TIMELINE_STEPS.length - 1)) * 100}%` }}
+                    style={{ maxWidth: "calc(100% - 2rem)" }}
+                  />
+                  {TIMELINE_STEPS.map((step, i) => {
+                    const Icon = step.icon;
+                    const isActive = i <= activeStepIndex;
+                    const isCurrent = i === activeStepIndex;
+                    return (
+                      <div key={step.key} className="relative flex flex-col items-center gap-2">
+                        <div
+                          className={cn(
+                            "relative z-10 flex h-8 w-8 items-center justify-center rounded-full border-2 transition-colors",
+                            isActive
+                              ? "border-blue-500 bg-blue-500 text-white"
+                              : "border-slate-200 bg-white text-slate-400"
+                          )}
+                        >
+                          <Icon className="h-3.5 w-3.5" />
+                        </div>
+                        <span
+                          className={cn(
+                            "text-[10px] font-medium sm:text-xs",
+                            isCurrent ? "text-blue-600" : isActive ? "text-slate-600" : "text-slate-400"
+                          )}
+                        >
+                          {step.label}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+
+              <Badge variant="info" className="mx-auto w-fit">
+                Keep this page open for live updates
+              </Badge>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </main>
   );

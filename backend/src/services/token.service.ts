@@ -1,5 +1,5 @@
 import { desc, eq, sql } from "drizzle-orm";
-import { tokens } from "../config/schema";
+import { logs, tokens } from "../config/schema";
 import { db } from "../config/db";
 
 type DbExecutor = Parameters<
@@ -47,7 +47,17 @@ export const createToken = async (
       })
       .returning();
 
-    return result[0];
+    const created = result[0];
+    if (created) {
+      await executor.insert(logs).values({
+        tokenId: created.id,
+        issueTime: new Date(),
+        callTime: null,
+        endTime: null,
+      });
+    }
+
+    return created;
   };
 
   if (tx) {

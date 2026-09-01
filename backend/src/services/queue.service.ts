@@ -67,24 +67,44 @@ export const getQueue = async (
       sql`${tokens.department} = ${normalizedDepartment} AND ${tokens.status} = 'waiting'`
     );
 
-  const priorityOrder: Record<string, number> = {
-    EMERGENCY: 3,
-    SENIOR: 2,
-    NORMAL: 1,
-  };
+  return sortWaitingQueue(waitingTokens);
+};
 
-  waitingTokens.sort((a, b) => {
-    if (priorityOrder[b.priority] !== priorityOrder[a.priority]) {
-      return priorityOrder[b.priority] - priorityOrder[a.priority];
+const PRIORITY_ORDER: Record<string, number> = {
+  EMERGENCY: 3,
+  SENIOR: 2,
+  NORMAL: 1,
+};
+
+function sortWaitingQueue<T extends { priority: string; createdAt: string | Date }>(rows: T[]): T[] {
+  return [...rows].sort((a, b) => {
+    if (PRIORITY_ORDER[b.priority] !== PRIORITY_ORDER[a.priority]) {
+      return (PRIORITY_ORDER[b.priority] ?? 0) - (PRIORITY_ORDER[a.priority] ?? 0);
     }
-
-    return (
-      new Date(a.createdAt).getTime() -
-      new Date(b.createdAt).getTime()
-    );
+    return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
   });
+}
 
-  return waitingTokens;
+export const getAllWaiting = async (): Promise<QueueTokenWithPatient[]> => {
+  const waitingTokens = await db
+    .select({
+      id: tokens.id,
+      tokenNumber: tokens.tokenNumber,
+      patientId: tokens.patientId,
+      department: tokens.department,
+      status: tokens.status,
+      priority: tokens.priority,
+      createdAt: tokens.createdAt,
+      patientName: patients.name,
+      patientAge: patients.age,
+      patientPhone: patients.phone,
+      chiefComplaint: patients.chiefComplaint,
+    })
+    .from(tokens)
+    .leftJoin(patients, eq(tokens.patientId, patients.id))
+    .where(sql`${tokens.status} = 'waiting'`);
+
+  return sortWaitingQueue(waitingTokens);
 };
 
 
@@ -109,6 +129,27 @@ export const callNext = async (department: string) => {
       .set({ status: "IN_PROGRESS" })
       .where(eq(tokens.id, nextToken.id))
       .returning();
+
+    const existingLog = await tx
+      .select({ id: logs.id })
+      .from(logs)
+      .where(eq(logs.tokenId, nextToken.id))
+      .orderBy(desc(logs.id))
+      .limit(1);
+
+    if (existingLog.length > 0) {
+      await tx
+        .update(logs)
+        .set({ callTime: new Date() })
+        .where(eq(logs.id, existingLog[0].id));
+    } else {
+      await tx.insert(logs).values({
+        tokenId: nextToken.id,
+        issueTime: nextToken.createdAt,
+        callTime: new Date(),
+        endTime: null,
+      });
+    }
 
     return updated[0] ?? { ...nextToken, status: "IN_PROGRESS" };
   });
@@ -175,6 +216,13 @@ export const completeToken = async (
         .update(logs)
         .set({ endTime: new Date() })
         .where(eq(logs.id, lastLog.id));
+    } else {
+      await tx.insert(logs).values({
+        tokenId,
+        issueTime: updatedToken[0].createdAt,
+        callTime: new Date(),
+        endTime: new Date(),
+      });
     }
 
     return updatedToken[0];

@@ -1,294 +1,525 @@
 "use client";
 
-import axios from "axios";
-import { useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { motion } from "framer-motion";
+import {
+  AlertTriangle,
+  Clock,
+  Stethoscope,
+  Timer,
+  TrendingUp,
+  UserCheck,
+  Users,
+} from "lucide-react";
+import { BarChart } from "@/components/charts/BarChart";
+import { DonutChart } from "@/components/charts/DonutChart";
+import { LineChart } from "@/components/charts/LineChart";
+import { Avatar } from "@/components/ui/Avatar";
+import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Input } from "@/components/ui/Input";
+import { KpiCard } from "@/components/ui/KpiCard";
+import { Modal } from "@/components/ui/Modal";
+import { Select } from "@/components/ui/Select";
+import { KpiCardSkeleton, TableRowSkeleton } from "@/components/ui/Skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/Table";
+import { useAuth } from "@/contexts/AuthContext";
+import { useToast } from "@/contexts/ToastContext";
+import { api } from "@/lib/api";
+import { DEPARTMENTS, DEPT_LABELS } from "@/lib/constants";
+import { normalizeQueuePayload, type QueueToken } from "@/lib/queue";
 
-const sidebarItems = ["Reception", "Doctor", "Admin", "Display Board"] as const;
-
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001").replace(/\/$/, "");
-
-const barHeights = [
-  { day: "Mon", newValue: "h-10", followups: "h-16" },
-  { day: "Tue", newValue: "h-12", followups: "h-20" },
-  { day: "Wed", newValue: "h-14", followups: "h-24" },
-  { day: "Thu", newValue: "h-10", followups: "h-18" },
-  { day: "Fri", newValue: "h-14", followups: "h-24" },
-] as const;
+type ChartPoint = { label: string; value: number };
 
 type AdminStats = {
   todayAppointments: number;
   patientsWaiting: number;
+  servedToday: number;
   activeDoctors: number;
   totalAdminStaff: number;
+  emergencyWaiting: number;
+  avgWaitMinutes: number | null;
   departmentBreakdown: { name: string; percent: number; count: number }[];
+  registrationsByHour: ChartPoint[];
+  waitByHour: ChartPoint[];
 };
 
 type AdminUserRow = {
   id: number;
   name: string;
+  email: string | null;
   role: string;
   department: string | null;
+  status: string;
 };
 
-const departmentColors = ["bg-emerald-500", "bg-amber-400", "bg-cyan-400", "bg-indigo-400"] as const;
-const roleLabel = (role: string) => role.slice(0, 1).toUpperCase() + role.slice(1);
+const DEPT_COLORS = ["#2563eb", "#10b981", "#f59e0b", "#8b5cf6", "#06b6d4", "#ef4444"];
+
+const emptyUserForm = {
+  name: "",
+  email: "",
+  password: "",
+  role: "reception",
+  department: "DENT",
+};
 
 export default function AdminPage() {
+  const { user: me } = useAuth();
+  const { toast } = useToast();
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<AdminUserRow[]>([]);
+  const [liveQueue, setLiveQueue] = useState<QueueToken[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState(emptyUserForm);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  async function loadDashboard() {
+    const [{ data: statsData }, { data: usersData }, { data: queueData }] = await Promise.all([
+      api.get<{ stats: AdminStats }>("/admin/stats"),
+      api.get<{ users: AdminUserRow[] }>("/admin/users"),
+      api.get<{ queue: QueueToken[] }>("/search/waiting"),
+    ]);
+    setStats(statsData.stats ?? null);
+    setUsers(Array.isArray(usersData.users) ? usersData.users : []);
+    setLiveQueue(normalizeQueuePayload(queueData.queue));
+  }
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      setLoading(true);
       setError(null);
       try {
-        const [{ data: statsData }, { data: usersData }] = await Promise.all([
-          axios.get<{ stats: AdminStats }>(`${API_BASE}/admin/stats`),
-          axios.get<{ users: AdminUserRow[] }>(`${API_BASE}/admin/users`),
-        ]);
-        if (cancelled) return;
-        setStats(statsData.stats ?? null);
-        setUsers(Array.isArray(usersData.users) ? usersData.users : []);
-      } catch (e) {
-        if (!cancelled) setError("Failed to load admin dashboard data.");
+        await loadDashboard();
+      } catch {
+        if (!cancelled) setError("Failed to load dashboard data.");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     }
     void load();
+    const id = window.setInterval(() => {
+      void loadDashboard().catch(() => undefined);
+    }, 12000);
     return () => {
       cancelled = true;
+      window.clearInterval(id);
     };
   }, []);
 
-  const statCards = useMemo(() => {
-    return [
-      {
-        title: "Today's Appointments",
-        value: stats?.todayAppointments ?? "—",
-        icon: "📅",
-        cardStyle: "bg-amber-50 text-amber-700",
-      },
-      {
-        title: "Patients Waiting",
-        value: stats?.patientsWaiting ?? "—",
-        icon: "🕘",
-        cardStyle: "bg-cyan-50 text-cyan-700",
-      },
-      {
-        title: "Active Doctors",
-        value: stats?.activeDoctors ?? "—",
-        icon: "🩺",
-        cardStyle: "bg-emerald-50 text-emerald-700",
-      },
-      {
-        title: "Total Admin Staff",
-        value: stats?.totalAdminStaff ?? "—",
-        icon: "👥",
-        cardStyle: "bg-violet-50 text-violet-700",
-      },
-    ] as const;
-  }, [stats]);
+  const avgWaitMinutes = stats?.avgWaitMinutes != null ? `${stats.avgWaitMinutes} min` : "—";
 
-  const departments = useMemo(() => {
-    const list = stats?.departmentBreakdown ?? [];
-    return list.slice(0, 4).map((d, idx) => ({
-      name: d.name,
-      percent: `${d.percent}%`,
-      color: departmentColors[idx] ?? "bg-slate-400",
+  const deptChartData = useMemo(() => {
+    return (stats?.departmentBreakdown ?? []).map((d, i) => ({
+      label: DEPT_LABELS[d.name] ?? d.name,
+      value: d.count,
+      color: DEPT_COLORS[i % DEPT_COLORS.length],
     }));
   }, [stats]);
 
-  const uiUsers = useMemo(() => {
-    return users.map((u) => {
-      const parts = String(u.name ?? "")
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean);
-      const initials = (parts[0]?.[0] ?? "U") + (parts[1]?.[0] ?? "");
-      return {
-        id: u.id,
-        name: u.name,
-        initials: initials.toUpperCase(),
-        role: roleLabel(String(u.role ?? "")),
-        department: u.department ?? "—",
-        status: "Active",
-      };
-    });
-  }, [users]);
+  const donutSegments = deptChartData;
+
+  const filteredUsers = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return users;
+    return users.filter(
+      (u) =>
+        u.name.toLowerCase().includes(q) ||
+        u.role.toLowerCase().includes(q) ||
+        (u.email ?? "").toLowerCase().includes(q) ||
+        (u.department ?? "").toLowerCase().includes(q)
+    );
+  }, [users, search]);
+
+  const handleAddUser = async (e: FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+    setSaving(true);
+    try {
+      await api.post("/user/register", {
+        name: form.name,
+        email: form.email,
+        password: form.password,
+        role: form.role,
+        department: form.role === "doctor" ? form.department : null,
+      });
+      toast("Staff account created", "success");
+      setAddOpen(false);
+      setForm(emptyUserForm);
+      await loadDashboard();
+    } catch (err) {
+      const message =
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+        "Could not create user.";
+      setFormError(message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleStatus = async (row: AdminUserRow) => {
+    const next = row.status === "active" ? "inactive" : "active";
+    try {
+      await api.patch(`/user/${row.id}/status`, { status: next });
+      toast(`${row.name} is now ${next}`, "success");
+      await loadDashboard();
+    } catch (err) {
+      const message =
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+        "Could not update status.";
+      toast(message, "error");
+    }
+  };
 
   return (
-    <div className="h-[calc(100dvh-70px)] bg-slate-100 overflow-hidden">
-      <div className="flex h-full w-full overflow-hidden border border-slate-200 bg-white shadow-sm">
-        <aside className="hidden h-full w-56 shrink-0 border-r border-slate-200 bg-white lg:flex lg:flex-col lg:px-5 lg:py-8">
-          <p className="mb-6 px-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Menu</p>
-          <nav className="space-y-2">
-            {sidebarItems.map((item) => {
-              const isActive = item === "Admin";
-              return (
-                <div
-                  key={item}
-                  className={`flex cursor-default items-center rounded-lg px-3 py-2.5 text-sm font-medium transition ${
-                    isActive
-                      ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100"
-                      : "text-slate-600 hover:bg-slate-50"
-                  }`}
+    <div className="space-y-8">
+      <motion.div
+        initial={{ opacity: 0, y: -8 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between"
+      >
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+            Dashboard
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Welcome back{me?.name ? `, ${me.name.split(" ")[0]}` : ""} — here&apos;s what&apos;s happening at the hospital today.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500 pulse-ring" />
+          Live data connected
+        </div>
+      </motion.div>
+
+      {error && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        {loading ? (
+          Array.from({ length: 5 }).map((_, i) => <KpiCardSkeleton key={i} />)
+        ) : (
+          <>
+            <KpiCard
+              title="Patients Waiting"
+              value={stats?.patientsWaiting ?? 0}
+              icon={Users}
+              gradient="gradient-primary"
+              trend={{ value: "Live queue", positive: true }}
+              delay={0}
+            />
+            <KpiCard
+              title="Served Today"
+              value={stats?.servedToday ?? 0}
+              icon={UserCheck}
+              gradient="gradient-success"
+              trend={{ value: `${stats?.todayAppointments ?? 0} registered`, positive: true }}
+              delay={0.05}
+            />
+            <KpiCard
+              title="Avg. Waiting Time"
+              value={avgWaitMinutes}
+              icon={Timer}
+              gradient="gradient-warning"
+              trend={{ value: stats?.avgWaitMinutes != null ? "From call logs" : "No calls yet", positive: true }}
+              delay={0.1}
+            />
+            <KpiCard
+              title="Active Doctors"
+              value={stats?.activeDoctors ?? 0}
+              icon={Stethoscope}
+              gradient="gradient-violet"
+              trend={{ value: "On duty", positive: true }}
+              delay={0.15}
+            />
+            <KpiCard
+              title="Emergency Patients"
+              value={stats?.emergencyWaiting ?? 0}
+              icon={AlertTriangle}
+              gradient="gradient-danger"
+              trend={{ value: "In queue", positive: (stats?.emergencyWaiting ?? 0) === 0 }}
+              delay={0.2}
+            />
+          </>
+        )}
+      </section>
+
+      <section className="grid gap-6 lg:grid-cols-5">
+        <Card className="lg:col-span-3" hover>
+          <CardHeader>
+            <div>
+              <CardTitle>Live Queue</CardTitle>
+              <CardDescription>Waiting patients across all departments</CardDescription>
+            </div>
+            <Badge variant="success">
+              <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              Live
+            </Badge>
+          </CardHeader>
+          {liveQueue.length === 0 ? (
+            <EmptyState
+              icon={Users}
+              title="No patients waiting"
+              description="The queue is clear right now."
+            />
+          ) : (
+            <div className="space-y-2">
+              {liveQueue.slice(0, 8).map((token, i) => (
+                <motion.div
+                  key={token.id}
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: i * 0.03 }}
+                  className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 px-4 py-3 transition hover:bg-slate-50"
                 >
-                  <span className="mr-3 text-sm text-slate-400">•</span>
-                  {item}
-                </div>
-              );
-            })}
-          </nav>
-        </aside>
-
-        <main className="min-w-0 flex flex-1 flex-col overflow-hidden bg-slate-50 px-4 py-4 md:px-8 md:py-5">
-          <section className="mb-4 shrink-0">
-            <h1 className="text-3xl font-semibold tracking-tight text-slate-900">
-              Welcome, Shruti Mehta 👋
-            </h1>
-            <p className="mt-2 text-sm text-slate-600">
-              Monitor department statistics and manage users
-            </p>
-          </section>
-
-          {error && (
-            <section className="mb-4 shrink-0">
-              <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                {error}
-              </p>
-            </section>
-          )}
-
-          <section className="mb-4 grid shrink-0 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {statCards.map((card) => (
-              <div
-                key={card.title}
-                className="rounded-xl bg-white p-4 shadow-md ring-1 ring-slate-100"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm text-slate-600">{card.title}</p>
-                    <p className="mt-2 text-3xl font-bold text-slate-900">{card.value}</p>
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-xs font-bold text-blue-700">
+                      {i + 1}
+                    </span>
+                    <div>
+                      <p className="font-semibold text-blue-600">{token.tokenNumber}</p>
+                      <p className="text-sm text-slate-600">
+                        {(token.patientName ?? "Patient").trim() || "Patient"} · {token.department}
+                      </p>
+                    </div>
                   </div>
-                  <div
-                    className={`flex h-10 w-10 items-center justify-center rounded-lg text-lg ${card.cardStyle}`}
+                  <Badge
+                    variant={
+                      token.priority?.toUpperCase() === "EMERGENCY"
+                        ? "danger"
+                        : token.priority?.toUpperCase() === "SENIOR"
+                          ? "warning"
+                          : "info"
+                    }
                   >
-                    {card.icon}
+                    {token.priority}
+                  </Badge>
+                </motion.div>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        <Card className="lg:col-span-2" hover>
+          <CardHeader>
+            <CardTitle>Today&apos;s Statistics</CardTitle>
+            <CardDescription>Key metrics at a glance</CardDescription>
+          </CardHeader>
+          <div className="space-y-4">
+            {[
+              { label: "Total Registrations", value: stats?.todayAppointments ?? 0, icon: TrendingUp },
+              { label: "Admin Staff", value: stats?.totalAdminStaff ?? 0, icon: Users },
+              { label: "Departments Active", value: stats?.departmentBreakdown?.length ?? 0, icon: Clock },
+            ].map((item) => (
+              <div
+                key={item.label}
+                className="flex items-center justify-between rounded-xl border border-slate-100 px-4 py-3"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100">
+                    <item.icon className="h-4 w-4 text-slate-600" />
                   </div>
+                  <span className="text-sm text-slate-600">{item.label}</span>
                 </div>
+                <span className="text-lg font-bold text-slate-900">{item.value}</span>
               </div>
             ))}
-          </section>
+          </div>
+        </Card>
+      </section>
 
-          <section className="mb-4 grid shrink-0 gap-4 xl:grid-cols-3">
-            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-md xl:col-span-2">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-base font-semibold text-slate-900">
-                  Appointments Overview
-                </h2>
-                <div className="flex items-center gap-4 text-xs text-slate-500">
-                  <span className="inline-flex items-center gap-2">
-                    <span className="h-2.5 w-2.5 rounded-full bg-cyan-400" />
-                    New
-                  </span>
-                  <span className="inline-flex items-center gap-2">
-                    <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
-                    Follow-ups
-                  </span>
-                </div>
+      <section id="analytics" className="grid gap-6 lg:grid-cols-3">
+        <Card hover id="departments">
+          <CardHeader>
+            <CardTitle>Patients per Department</CardTitle>
+            <CardDescription>Current waiting distribution</CardDescription>
+          </CardHeader>
+          {deptChartData.length > 0 ? (
+            <BarChart data={deptChartData} />
+          ) : (
+            <EmptyState icon={Users} title="No department data" className="min-h-[160px]" />
+          )}
+        </Card>
+
+        <Card hover>
+          <CardHeader>
+            <CardTitle>Registrations today</CardTitle>
+            <CardDescription>Tokens issued by hour</CardDescription>
+          </CardHeader>
+          {(stats?.registrationsByHour.length ?? 0) > 1 ? (
+            <LineChart data={stats?.registrationsByHour ?? []} />
+          ) : (
+            <EmptyState icon={TrendingUp} title="Not enough hourly data yet" className="min-h-[160px]" />
+          )}
+        </Card>
+
+        <Card hover>
+          <CardHeader>
+            <CardTitle>Waiting time today</CardTitle>
+            <CardDescription>Average minutes until called, by hour</CardDescription>
+          </CardHeader>
+          {(stats?.waitByHour.length ?? 0) > 1 ? (
+            <LineChart data={stats?.waitByHour ?? []} />
+          ) : (
+            <EmptyState icon={Timer} title="Not enough call-log data yet" className="min-h-[160px]" />
+          )}
+        </Card>
+      </section>
+
+      <section id="doctors" className="grid gap-6 xl:grid-cols-3">
+        <Card hover className="xl:col-span-1">
+          <CardHeader>
+            <CardTitle>Department Breakdown</CardTitle>
+          </CardHeader>
+          {donutSegments.length > 0 ? (
+            <DonutChart segments={donutSegments} />
+          ) : (
+            <EmptyState icon={Users} title="No data" className="min-h-[160px]" />
+          )}
+        </Card>
+
+        <Card hover className="xl:col-span-2" padding="none">
+          <div className="border-b border-slate-100 p-5 sm:p-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <CardTitle>Staff</CardTitle>
+                <CardDescription>Hospital staff and doctors</CardDescription>
               </div>
-
-              <div className="flex h-44 items-end justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50 px-4 pb-4 pt-2">
-                {barHeights.map((bar) => (
-                  <div key={bar.day} className="flex flex-col items-center gap-2">
-                    <div className="flex items-end gap-1">
-                      <div className={`w-4 rounded-t-md bg-cyan-300 ${bar.newValue}`} />
-                      <div
-                        className={`w-4 rounded-t-md bg-emerald-400 ${bar.followups}`}
-                      />
-                    </div>
-                    <p className="text-xs text-slate-500">{bar.day}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-md">
-              <h2 className="mb-4 text-base font-semibold text-slate-900">
-                Department Breakdown
-              </h2>
-              <div className="flex items-center gap-5">
-                <div className="relative h-28 w-28 rounded-full bg-[conic-gradient(#10b981_0_40%,#fbbf24_40%_65%,#22d3ee_65%_85%,#818cf8_85%_100%)]">
-                  <div className="absolute inset-5 rounded-full bg-white" />
-                </div>
-                <div className="space-y-2 text-sm">
-                  {departments.map((item) => (
-                    <div key={item.name} className="flex items-center gap-2 text-slate-700">
-                      <span className={`h-2.5 w-2.5 rounded-full ${item.color}`} />
-                      <span>
-                        {item.name} {item.percent}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section className="flex min-h-0 flex-1 flex-col rounded-xl border border-slate-200 bg-white p-5 shadow-md">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold text-slate-900">Users Management</h2>
               <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-                <input
-                  type="text"
+                <Input
                   placeholder="Search users..."
-                  className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="h-10 sm:w-56"
                 />
-                <button
-                  type="button"
-                  className="h-10 rounded-lg bg-emerald-500 px-4 text-sm font-medium text-white transition hover:bg-emerald-600"
-                >
+                <Button size="sm" onClick={() => setAddOpen(true)}>
                   + Add User
-                </button>
+                </Button>
               </div>
             </div>
-
-            <div className="min-h-0 flex-1 overflow-auto">
-              <table className="min-w-full divide-y divide-slate-200">
-                <thead>
-                  <tr className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    <th className="px-3 py-3">User</th>
-                    <th className="px-3 py-3">Role</th>
-                    <th className="px-3 py-3">Department</th>
-                    <th className="px-3 py-3">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-sm">
-                  {uiUsers.map((user) => (
-                    <tr key={user.id} className="text-slate-700">
-                      <td className="px-3 py-3">
+          </div>
+          <Table className="border-0">
+            <TableHeader>
+              <TableRow>
+                <TableHead>User</TableHead>
+                <TableHead>Role</TableHead>
+                <TableHead>Department</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading
+                ? Array.from({ length: 4 }).map((_, i) => <TableRowSkeleton key={i} cols={4} />)
+                : filteredUsers.map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell>
                         <div className="flex items-center gap-3">
-                          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">
-                            {user.initials}
+                          <Avatar name={row.name} size="sm" />
+                          <div>
+                            <p className="font-medium text-slate-800">{row.name}</p>
+                            <p className="text-[11px] text-slate-400">{row.email}</p>
                           </div>
-                          <span className="font-medium text-slate-800">{user.name}</span>
                         </div>
-                      </td>
-                      <td className="px-3 py-3">{user.role}</td>
-                      <td className="px-3 py-3 text-slate-600">{user.department}</td>
-                      <td className="px-3 py-3">
-                        <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">
-                          {user.status}
-                        </span>
-                      </td>
-                    </tr>
+                      </TableCell>
+                      <TableCell className="capitalize">{row.role}</TableCell>
+                      <TableCell className="text-slate-500">{row.department ?? "—"}</TableCell>
+                      <TableCell>
+                        <button type="button" onClick={() => void toggleStatus(row)}>
+                          <Badge variant={row.status === "active" ? "success" : "outline"}>
+                            {row.status === "active" ? "Active" : "Inactive"}
+                          </Badge>
+                        </button>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </main>
-      </div>
+            </TableBody>
+          </Table>
+        </Card>
+      </section>
+
+      <Modal
+        open={addOpen}
+        onClose={() => !saving && setAddOpen(false)}
+        title="Add staff user"
+        description="Create a login for reception, doctor, or admin."
+        footer={null}
+      >
+        <form onSubmit={handleAddUser} className="space-y-3">
+          <Input
+            label="Name"
+            value={form.name}
+            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            required
+          />
+          <Input
+            label="Email"
+            type="email"
+            value={form.email}
+            onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+            required
+          />
+          <Input
+            label="Password"
+            type="password"
+            minLength={8}
+            value={form.password}
+            onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+            required
+          />
+          <Select
+            label="Role"
+            value={form.role}
+            onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}
+          >
+            <option value="reception">Reception</option>
+            <option value="doctor">Doctor</option>
+            <option value="admin">Admin</option>
+          </Select>
+          {form.role === "doctor" && (
+            <Select
+              label="Department"
+              value={form.department}
+              onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))}
+              required
+            >
+              {DEPARTMENTS.map((d) => (
+                <option key={d.code} value={d.code}>
+                  {d.label} ({d.code})
+                </option>
+              ))}
+            </Select>
+          )}
+          {formError && (
+            <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {formError}
+            </p>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={() => setAddOpen(false)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button type="submit" loading={saving}>
+              Create user
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

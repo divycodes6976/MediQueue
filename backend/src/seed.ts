@@ -2,11 +2,16 @@ import dotenv from "dotenv";
 import { and, eq } from "drizzle-orm";
 import { db } from "./config/db";
 import { patients, tokens, users } from "./config/schema";
+import { hashPassword } from "./services/auth.service";
 
 dotenv.config();
 
+/** Demo staff password for local/interview login. */
+export const SEED_STAFF_PASSWORD = "Password123";
+
 type SeedUser = {
   name: string;
+  email: string;
   role: "doctor" | "admin" | "reception";
   department: string | null;
 };
@@ -26,11 +31,11 @@ type SeedToken = {
 };
 
 const SEED_USERS: SeedUser[] = [
-  { name: "Dr. Rohan Kapoor", role: "doctor", department: "DENT" },
-  { name: "Dr. Ravi Patel", role: "doctor", department: "ORTH" },
-  { name: "Dr. Nisha Verma", role: "doctor", department: "CARD" },
-  { name: "Reception Desk", role: "reception", department: null },
-  { name: "Admin", role: "admin", department: null },
+  { name: "Dr. Rohan Kapoor", email: "rohan@mediqueue.local", role: "doctor", department: "DENT" },
+  { name: "Dr. Ravi Patel", email: "ravi@mediqueue.local", role: "doctor", department: "ORTH" },
+  { name: "Dr. Nisha Verma", email: "nisha@mediqueue.local", role: "doctor", department: "CARD" },
+  { name: "Reception Desk", email: "reception@mediqueue.local", role: "reception", department: null },
+  { name: "Shruti Mehta", email: "admin@mediqueue.local", role: "admin", department: null },
 ];
 
 const SEED_PATIENTS: SeedPatient[] = [
@@ -202,15 +207,73 @@ const SEED_TOKENS: SeedToken[] = [
 ];
 
 async function ensureUser(u: SeedUser) {
-  const existing = await db
+  const passwordHash = await hashPassword(SEED_STAFF_PASSWORD);
+  const email = u.email.trim().toLowerCase();
+
+  const byEmail = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, email))
+    .limit(1);
+
+  if (byEmail.length > 0) {
+    await db
+      .update(users)
+      .set({
+        name: u.name,
+        role: u.role,
+        department: u.department,
+        passwordHash,
+      })
+      .where(eq(users.id, byEmail[0].id));
+    return { created: false };
+  }
+
+  const byName = await db
     .select({ id: users.id })
     .from(users)
     .where(and(eq(users.name, u.name), eq(users.role, u.role)))
     .limit(1);
 
-  if (existing.length > 0) return { created: false };
+  if (byName.length > 0) {
+    await db
+      .update(users)
+      .set({
+        email,
+        passwordHash,
+        department: u.department,
+      })
+      .where(eq(users.id, byName[0].id));
+    return { created: false };
+  }
 
-  await db.insert(users).values(u);
+  if (u.role === "admin") {
+    const existingAdmin = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.role, "admin"))
+      .limit(1);
+    if (existingAdmin.length > 0) {
+      await db
+        .update(users)
+        .set({
+          name: u.name,
+          email,
+          passwordHash,
+          department: u.department,
+        })
+        .where(eq(users.id, existingAdmin[0].id));
+      return { created: false };
+    }
+  }
+
+  await db.insert(users).values({
+    name: u.name,
+    email,
+    passwordHash,
+    role: u.role,
+    department: u.department,
+  });
   return { created: true };
 }
 

@@ -2,8 +2,39 @@
 
 import axios from "axios";
 import { useEffect, useMemo, useRef, useState } from "react";
-
-type Doctor = { id: number; name: string; department: string | null };
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  Activity,
+  CheckCircle2,
+  ChevronRight,
+  CircleAlert,
+  Clock,
+  SkipForward,
+  Sparkles,
+  Stethoscope,
+  UsersRound,
+  Wifi,
+  WifiOff,
+} from "lucide-react";
+import { Badge, priorityBadgeVariant } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
+import { KpiCard } from "@/components/ui/KpiCard";
+import { ConfirmModal } from "@/components/ui/Modal";
+import { EmptyState } from "@/components/ui/EmptyState";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/Table";
+import { useToast } from "@/contexts/ToastContext";
+import { useAuth } from "@/contexts/AuthContext";
+import { API_BASE, api } from "@/lib/api";
+import { apiToUiPriority, type Priority } from "@/lib/constants";
+import { cn } from "@/lib/cn";
 
 type QueueToken = {
   id: number;
@@ -22,89 +53,76 @@ type QueueRow = {
   token: string;
   name: string;
   ageOrPhone: string;
-  priority: "Normal" | "Senior" | "Emergency";
+  priority: Priority;
   status: string;
   tokenId: number;
 };
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001").replace(/\/$/, "");
-
-const apiPriorityToUi = (p: string): "Normal" | "Senior" | "Emergency" => {
-  const u = p.toUpperCase();
-  if (u === "EMERGENCY") return "Emergency";
-  if (u === "SENIOR") return "Senior";
-  return "Normal";
-};
-
 const normalizeQueuePayload = (payload: unknown): QueueToken[] => {
   if (Array.isArray(payload)) return payload as QueueToken[];
-  if (payload && typeof payload === "object" && Array.isArray((payload as any).queue)) {
-    return (payload as any).queue as QueueToken[];
+  if (payload && typeof payload === "object" && Array.isArray((payload as { queue?: unknown }).queue)) {
+    return (payload as { queue: QueueToken[] }).queue;
   }
   return [];
 };
 
-const sidebarItems = ["Doctor", "Reception", "Admin", "Display Board"] as const;
+function formatDuration(seconds: number) {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
 
-const badgeStyles = {
-  Emergency: "bg-red-50 text-red-600 ring-red-200",
-  Senior: "bg-amber-50 text-amber-700 ring-amber-200",
-  Normal: "bg-emerald-50 text-emerald-600 ring-emerald-200",
-} as const;
+function formatPatientDetails(age?: number | null, phone?: string | null) {
+  const cleanPhone = phone?.replace(/\D/g, "") ?? "";
+  const maskedPhone = cleanPhone ? `••••${cleanPhone.slice(-4)}` : null;
+  return [age != null ? `${age}y` : null, maskedPhone].filter(Boolean).join(" · ") || "—";
+}
+
+function MedicalChairIllustration() {
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute bottom-3 right-28 hidden h-36 w-44 xl:block"
+    >
+      <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_center,rgba(147,197,253,0.32),rgba(196,181,253,0.14)_42%,transparent_72%)] blur-xl" />
+      <svg viewBox="0 0 220 170" className="relative h-full w-full text-blue-500/35" fill="none">
+        <circle cx="158" cy="40" r="24" fill="currentColor" opacity="0.1" />
+        <path d="M122 40h28c10 0 18 8 18 18v11h-46V40Z" fill="currentColor" opacity="0.16" />
+        <path d="M74 81c0-10 8-18 18-18h62c10 0 18 8 18 18v12H74V81Z" fill="currentColor" opacity="0.13" />
+        <path d="M83 94h80l-8 29H92l-9-29Z" fill="currentColor" opacity="0.17" />
+        <path d="M103 123h39l8 20h-55l8-20Z" fill="currentColor" opacity="0.14" />
+        <path d="M110 143v12m23-12v12M92 155h59" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
+        <path d="M65 74 50 59m10 0-10 10M172 53l19-18m-9 0h9v9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" opacity="0.7" />
+        <circle cx="49" cy="58" r="6" fill="currentColor" opacity="0.3" />
+        <circle cx="192" cy="33" r="5" fill="currentColor" opacity="0.25" />
+      </svg>
+    </div>
+  );
+}
 
 export default function DoctorPage() {
-  const [doctors, setDoctors] = useState<Doctor[]>([]);
-  const [selectedDoctorId, setSelectedDoctorId] = useState<number | null>(null);
+  const { toast } = useToast();
+  const { user } = useAuth();
   const [queueTokens, setQueueTokens] = useState<QueueToken[]>([]);
   const [nowServing, setNowServing] = useState<QueueToken | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sseStatus, setSseStatus] = useState<"connecting" | "open" | "closed">("connecting");
+  const [consultSeconds, setConsultSeconds] = useState(0);
+  const [skipConfirm, setSkipConfirm] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  const consultStartRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadDoctors() {
-      try {
-        const { data } = await axios.get<{ doctors: Doctor[] }>(`${API_BASE}/user/doctors`);
-        if (cancelled) return;
-        const list = Array.isArray(data.doctors) ? data.doctors : [];
-        setDoctors(list);
-
-        const saved = Number(localStorage.getItem("doctorId"));
-        const initial =
-          Number.isInteger(saved) && saved > 0 && list.some((d) => d.id === saved)
-            ? saved
-            : list[0]?.id ?? null;
-        setSelectedDoctorId(initial);
-      } catch (e) {
-        console.error(e);
-        if (!cancelled) setError("Failed to load doctors.");
-      }
-    }
-
-    void loadDoctors();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const selectedDoctor = useMemo(
-    () => doctors.find((d) => d.id === selectedDoctorId) ?? null,
-    [doctors, selectedDoctorId]
-  );
-
-  const department = useMemo(() => (selectedDoctor?.department ?? "").trim().toUpperCase(), [selectedDoctor]);
+  const department = (user?.department ?? "").trim().toUpperCase();
 
   useEffect(() => {
     if (!department) return;
 
-    // If user switches doctor/department, clear any previously "Now Serving" token
-    // so we don't show a token from a different department.
     setNowServing(null);
+    consultStartRef.current = null;
+    setConsultSeconds(0);
 
-    // cleanup previous
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
@@ -117,18 +135,14 @@ export default function DoctorPage() {
     eventSourceRef.current = es;
 
     es.onopen = () => setSseStatus("open");
-    es.onerror = () => {
-      setSseStatus("closed");
-      // browser will auto-retry; keep UI informative
-    };
+    es.onerror = () => setSseStatus("closed");
     es.onmessage = (evt) => {
       try {
         const parsed = JSON.parse(evt.data);
-        if (parsed && typeof parsed === "object" && "msg" in parsed) return; // ignore connect message
-        const next = normalizeQueuePayload(parsed);
-        setQueueTokens(next);
+        if (parsed && typeof parsed === "object" && "msg" in parsed) return;
+        setQueueTokens(normalizeQueuePayload(parsed));
       } catch {
-        // ignore malformed
+        // ignore
       }
     };
 
@@ -139,25 +153,26 @@ export default function DoctorPage() {
   }, [department]);
 
   useEffect(() => {
-    return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-        eventSourceRef.current = null;
+    if (!nowServing) {
+      consultStartRef.current = null;
+      setConsultSeconds(0);
+      return;
+    }
+    consultStartRef.current = Date.now();
+    const id = setInterval(() => {
+      if (consultStartRef.current) {
+        setConsultSeconds(Math.floor((Date.now() - consultStartRef.current) / 1000));
       }
-    };
-  }, []);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [nowServing?.id]);
 
   const queueRows: QueueRow[] = useMemo(() => {
     return queueTokens.map((t) => ({
       token: t.tokenNumber,
       name: t.patientName?.trim() || (t.patientId ? `Patient #${t.patientId}` : "Patient"),
-      ageOrPhone:
-        t.patientAge != null || (t.patientPhone ?? "").trim()
-          ? [t.patientAge != null ? `${t.patientAge}y` : null, t.patientPhone?.trim() || null]
-              .filter(Boolean)
-              .join(" / ")
-          : "—",
-      priority: apiPriorityToUi(t.priority),
+      ageOrPhone: formatPatientDetails(t.patientAge, t.patientPhone),
+      priority: apiToUiPriority(t.priority),
       status: t.status.toLowerCase() === "waiting" ? "In Queue" : t.status,
       tokenId: t.id,
     }));
@@ -170,21 +185,33 @@ export default function DoctorPage() {
     const patientAge = nowServing.patientAge ?? fromLive?.patientAge ?? null;
     const patientPhone = (nowServing.patientPhone ?? fromLive?.patientPhone ?? "").trim();
     const name = patientName || (nowServing.patientId ? `Patient #${nowServing.patientId}` : "Patient");
-    const ageOrPhone =
-      patientAge != null || patientPhone
-        ? [patientAge != null ? `${patientAge}y` : null, patientPhone || null].filter(Boolean).join(" / ")
-        : null;
+    const ageOrPhone = formatPatientDetails(patientAge, patientPhone);
     return { name, ageOrPhone };
   }, [nowServing, queueTokens]);
+
+  const queueSummary = useMemo(() => {
+    const priorityPatients = queueTokens.filter(
+      (token) => apiToUiPriority(token.priority) !== "Normal"
+    ).length;
+    return {
+      waiting: queueRows.length,
+      priorityPatients,
+      nextToken: queueRows[0]?.token ?? "—",
+    };
+  }, [queueRows, queueTokens]);
+
+  const nextUp = queueRows[0] ?? null;
 
   const callNext = async () => {
     if (!department) return;
     setError(null);
+    setActionLoading(true);
     try {
-      const { data } = await axios.post<{ token: QueueToken }>(`${API_BASE}/queue/call-next`, {
+      const { data } = await api.post<{ token: QueueToken }>("/queue/call-next", {
         department,
       });
       setNowServing(data.token ?? null);
+      toast(`Now serving ${data.token?.tokenNumber ?? "patient"}`, "success");
     } catch (e) {
       if (axios.isAxiosError(e)) {
         const d = e.response?.data as { message?: string; error?: string } | undefined;
@@ -192,15 +219,20 @@ export default function DoctorPage() {
       } else {
         setError("Failed to call next patient.");
       }
+      toast("Failed to call next patient", "error");
+    } finally {
+      setActionLoading(false);
     }
   };
 
   const complete = async (action: "DONE" | "SKIPPED") => {
     if (!nowServing?.id) return;
     setError(null);
+    setActionLoading(true);
     try {
-      await axios.post(`${API_BASE}/queue/complete`, { tokenId: nowServing.id, action });
+      await api.post("/queue/complete", { tokenId: nowServing.id, action });
       setNowServing(null);
+      toast(action === "DONE" ? "Consultation completed" : "Patient skipped", "success");
     } catch (e) {
       if (axios.isAxiosError(e)) {
         const d = e.response?.data as { message?: string; error?: string } | undefined;
@@ -208,186 +240,258 @@ export default function DoctorPage() {
       } else {
         setError("Failed to update token.");
       }
+      toast("Failed to update token", "error");
+    } finally {
+      setActionLoading(false);
+      setSkipConfirm(false);
     }
   };
 
   return (
-    <div className="h-[calc(100vh-70px)] bg-slate-100 overflow-hidden">
-      <div className="flex h-full w-full overflow-hidden border border-slate-200 bg-white shadow-sm">
-        <aside className="hidden h-full w-56 shrink-0 border-r border-slate-200 bg-white lg:flex lg:flex-col lg:px-5 lg:py-8">
-          <p className="mb-6 px-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Menu</p>
-          <nav className="space-y-2">
-            {sidebarItems.map((item) => {
-              const isActive = item === "Doctor";
-              return (
-                <div
-                  key={item}
-                  className={`flex cursor-default items-center rounded-lg px-3 py-2.5 text-sm font-medium transition ${
-                    isActive
-                      ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100"
-                      : "text-slate-600 hover:bg-slate-50"
-                  }`}
-                >
-                  <span className="mr-3 text-sm text-slate-400">•</span>
-                  {item}
-                </div>
-              );
-            })}
-          </nav>
-        </aside>
-
-        <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-slate-50 px-4 py-5 md:px-8 md:py-6">
-          <section className="mb-5">
-            <h1 className="text-3xl font-semibold tracking-tight text-slate-900">
-              Welcome{selectedDoctor ? `, ${selectedDoctor.name}` : ""} 👋
-            </h1>
-            <p className="mt-2 text-sm text-slate-600">
-              Manage your patients and queue
-            </p>
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <label className="text-sm font-medium text-slate-700">Doctor</label>
-              <select
-                value={selectedDoctorId ?? ""}
-                onChange={(e) => {
-                  const id = Number(e.target.value);
-                  const next = Number.isInteger(id) && id > 0 ? id : null;
-                  setSelectedDoctorId(next);
-                  if (next) localStorage.setItem("doctorId", String(next));
-                }}
-                className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700"
-              >
-                {doctors.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name} {d.department ? `(${d.department})` : ""}
-                  </option>
-                ))}
-              </select>
-
-              <span
-                className={`text-xs font-medium ${
-                  sseStatus === "open" ? "text-emerald-700" : "text-slate-500"
-                }`}
-              >
-                {department ? `Dept: ${department}` : "Pick a doctor"}
-                {department ? ` • Live: ${sseStatus}` : ""}
+    <div className="space-y-7 pb-5">
+      <section className="relative overflow-hidden rounded-xl border border-slate-200/90 bg-[linear-gradient(110deg,#ffffff_0%,#f8fbff_65%,#fafaff_100%)] px-5 py-6 shadow-[0_1px_2px_rgb(15_23_42_/_0.03)] sm:px-7 sm:py-7">
+        <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-blue-200/15 blur-3xl" />
+        <div className="pointer-events-none absolute bottom-0 left-1/3 h-20 w-56 rounded-full bg-indigo-200/10 blur-3xl" />
+        <Stethoscope className="pointer-events-none absolute right-7 top-5 hidden h-16 w-16 rotate-[-16deg] text-blue-200/30 lg:block" strokeWidth={1.25} />
+        <div className="relative flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="mb-3 flex items-center gap-2">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm shadow-blue-600/20">
+                <Stethoscope className="h-4 w-4" />
               </span>
+              <span className="text-[12px] font-semibold uppercase tracking-[0.14em] text-blue-700">Clinical workspace</span>
             </div>
-          </section>
+            <h1 className="text-[30px] font-semibold leading-tight tracking-[-0.035em] text-slate-900 sm:text-[34px]">
+              Doctor Queue{user?.name ? ` — ${user.name}` : ""}
+            </h1>
+            <p className="mt-2 text-sm font-medium leading-6 text-slate-600">Manage your patient queue in real time</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {department && (
+              <Badge variant="outline" className="bg-white/90 px-3 py-1.5 font-medium text-slate-700 shadow-[0_1px_2px_rgb(15_23_42_/_0.03)]">
+                Department: {department}
+              </Badge>
+            )}
+            {sseStatus === "open" ? (
+              <Badge variant="success" className="bg-emerald-50/80 px-3 py-1.5 font-medium shadow-[0_1px_2px_rgb(15_23_42_/_0.03)]">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 pulse-ring" />
+                <Wifi className="h-3.5 w-3.5" /> SSE Connected
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="bg-white/80 px-3 py-1.5 shadow-sm">
+                <WifiOff className="h-3.5 w-3.5" /> {sseStatus === "connecting" ? "Connecting…" : "Reconnecting…"}
+              </Badge>
+            )}
+          </div>
+        </div>
+      </section>
 
-          <section className="mb-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <p className="mb-2 text-sm font-medium text-emerald-700">Now Serving</p>
-                <p className="text-4xl font-bold tracking-tight text-slate-900">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <KpiCard title="Patients waiting" value={queueSummary.waiting} icon={UsersRound} gradient="bg-blue-600" delay={0.02} />
+        <KpiCard title="Priority patients" value={queueSummary.priorityPatients} icon={CircleAlert} gradient="bg-amber-500" delay={0.06} />
+        <KpiCard title="In consultation" value={nowServing ? 1 : 0} icon={Activity} gradient="bg-violet-600" delay={0.1} />
+        <KpiCard title="Next token" value={queueSummary.nextToken} icon={ChevronRight} gradient="bg-cyan-600" delay={0.14} />
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={nowServing?.id ?? "empty"}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -12 }}
+            className="h-full"
+          >
+            <Card
+              className={cn(
+                "relative h-full overflow-hidden border-2 transition-colors",
+                nowServing ? "border-blue-200/90 bg-[linear-gradient(120deg,#ffffff_0%,#fbfdff_66%,#f8faff_100%)] shadow-[0_8px_24px_rgb(37_99_235_/_0.06)]" : "border-slate-200/90 bg-[linear-gradient(120deg,#ffffff_0%,#fbfcfe_100%)]"
+              )}
+            >
+              {nowServing && (
+                <div className="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-blue-500/5 blur-2xl" />
+              )}
+              <MedicalChairIllustration />
+              <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-100">
+                    <Stethoscope className="h-4 w-4 text-blue-600" />
+                  </div>
+                  <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-blue-700">Now Serving</p>
+                </div>
+                <p className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-slate-900 sm:text-5xl">
                   {nowServing?.tokenNumber ?? "—"}
                 </p>
-                <p className="mt-2 text-2xl font-semibold text-slate-800">
-                  {nowServingDisplay?.name ?? "—"}
+                <p className="mt-2 text-xl font-semibold tracking-[-0.015em] text-slate-800">
+                  {nowServingDisplay?.name ?? "No patient currently being served"}
                 </p>
-                {nowServingDisplay?.ageOrPhone && (
-                  <p className="mt-1 text-sm text-slate-600">{nowServingDisplay.ageOrPhone}</p>
+                {nowServing && nowServingDisplay?.ageOrPhone !== "—" && (
+                  <p className="mt-1 text-sm text-slate-500">{nowServingDisplay.ageOrPhone}</p>
                 )}
-                <p className="mt-1 text-sm text-slate-600">
-                  {nowServing ? `Priority: ${apiPriorityToUi(nowServing.priority)}` : "—"}
-                </p>
-              </div>
-
-              <div className="flex flex-col items-start gap-3 md:items-end">
                 {nowServing && (
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${
-                      badgeStyles[apiPriorityToUi(nowServing.priority)]
-                    }`}
-                  >
-                    {apiPriorityToUi(nowServing.priority)}
-                  </span>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <Badge variant={priorityBadgeVariant(apiToUiPriority(nowServing.priority))}>
+                      {apiToUiPriority(nowServing.priority)}
+                    </Badge>
+                    <div className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200/80 bg-white px-3 py-1.5 text-sm font-mono font-semibold text-slate-700 shadow-[0_1px_2px_rgb(15_23_42_/_0.03)]">
+                      <Clock className="h-3.5 w-3.5 text-slate-500" />
+                      {formatDuration(consultSeconds)}
+                    </div>
+                  </div>
                 )}
+                </div>
 
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={callNext}
-                    disabled={!department}
-                    className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-emerald-600"
-                  >
-                    Call Next
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => complete("DONE")}
-                    disabled={!nowServing}
-                    className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-                  >
-                    Complete
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => complete("SKIPPED")}
-                    disabled={!nowServing}
-                    className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-                  >
-                    Skip
-                  </button>
+                <div className="flex flex-wrap gap-2 lg:max-w-xs lg:justify-end">
+                <Button onClick={callNext} disabled={!department} loading={actionLoading} size="lg" className="rounded-[11px] shadow-[0_5px_14px_rgb(37_99_235_/_0.2)] hover:shadow-[0_7px_18px_rgb(37_99_235_/_0.26)]">
+                  <ChevronRight className="h-4 w-4" />
+                  Call Next Patient
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => complete("DONE")}
+                  disabled={!nowServing}
+                  loading={actionLoading}
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  Complete
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => setSkipConfirm(true)}
+                  disabled={!nowServing}
+                >
+                  <SkipForward className="h-4 w-4" />
+                  Skip
+                </Button>
                 </div>
               </div>
+              {error && (
+                <p className="relative mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {error}
+                </p>
+              )}
+            </Card>
+          </motion.div>
+        </AnimatePresence>
+
+        <Card className="relative h-full overflow-hidden border-slate-200/90 bg-[linear-gradient(145deg,#ffffff_0%,#fbfdff_100%)]" hover>
+          <div className="pointer-events-none absolute -bottom-12 -right-10 h-40 w-40 rounded-full bg-teal-100/35 blur-3xl" />
+          <div className="relative">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-50 text-teal-600 ring-1 ring-inset ring-teal-100">
+                  <Sparkles className="h-4 w-4" />
+                </span>
+                <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-teal-700">Next Up</p>
+              </div>
+              <ChevronRight className="h-4 w-4 text-slate-300" />
             </div>
-            {error && (
-              <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                {error}
-              </p>
+
+            {nextUp ? (
+              <div className="mt-8">
+                <p className="text-[30px] font-semibold leading-none tracking-[-0.04em] text-teal-700">{nextUp.token}</p>
+                <p className="mt-3 text-lg font-semibold tracking-[-0.02em] text-slate-800">{nextUp.name}</p>
+                {nextUp.ageOrPhone !== "—" && <p className="mt-1 text-sm text-slate-500">{nextUp.ageOrPhone}</p>}
+                <div className="mt-5">
+                  <Badge variant={priorityBadgeVariant(nextUp.priority)}>{nextUp.priority} Priority</Badge>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-8">
+                <p className="text-lg font-semibold text-slate-800">No patient waiting</p>
+                <p className="mt-2 max-w-[220px] text-sm leading-6 text-slate-500">The next patient will appear here when the queue updates.</p>
+              </div>
             )}
-          </section>
-
-          <section className="flex min-h-0 flex-1 flex-col rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold text-slate-900">Queue</h2>
-              <button
-                type="button"
-                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
-              >
-                Live via SSE
-              </button>
-            </div>
-
-            <div className="min-h-0 flex-1 overflow-auto">
-              <table className="min-w-full divide-y divide-slate-200">
-                <thead>
-                  <tr className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    <th className="px-3 py-3">Token</th>
-                    <th className="px-3 py-3">Patient Name</th>
-                    <th className="px-3 py-3">Age / Phone</th>
-                    <th className="px-3 py-3">Priority</th>
-                    <th className="px-3 py-3">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-sm">
-                  {queueRows.map((row) => (
-                    <tr key={row.token} className="text-slate-700">
-                      <td className="px-3 py-3 font-medium text-emerald-700">{row.token}</td>
-                      <td className="px-3 py-3">{row.name}</td>
-                      <td className="px-3 py-3 text-slate-600">{row.ageOrPhone}</td>
-                      <td className="px-3 py-3">
-                        <span
-                          className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${
-                            badgeStyles[row.priority]
-                          }`}
-                        >
-                          {row.priority}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3">
-                        <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700 ring-1 ring-sky-200">
-                          {row.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </main>
+          </div>
+        </Card>
       </div>
+
+      <Card padding="none">
+        <div className="border-b border-slate-100 bg-slate-50/45 p-5 sm:p-6">
+          <CardHeader className="mb-0">
+            <div>
+              <CardTitle>Patient Queue</CardTitle>
+              <CardDescription>{queueRows.length} patients currently in this department queue</CardDescription>
+            </div>
+          </CardHeader>
+        </div>
+
+        {queueRows.length === 0 ? (
+          <div className="p-6">
+            <EmptyState icon={Stethoscope} title="Queue is empty" description="No patients waiting right now" />
+          </div>
+        ) : (
+          <>
+            <div className="hidden md:block">
+              <Table className="border-0">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Token</TableHead>
+                    <TableHead>Patient</TableHead>
+                    <TableHead>Age / Phone</TableHead>
+                    <TableHead>Priority</TableHead>
+                    <TableHead>Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {queueRows.map((row, i) => (
+                    <TableRow
+                      key={row.token}
+                      className={cn(
+                        i === 0 && !nowServing && "bg-blue-50/50",
+                        nowServing?.tokenNumber === row.token && "bg-blue-50"
+                      )}
+                    >
+                      <TableCell className="font-bold text-blue-600">{row.token}</TableCell>
+                      <TableCell className="font-medium">{row.name}</TableCell>
+                      <TableCell className="text-slate-500">{row.ageOrPhone}</TableCell>
+                      <TableCell>
+                        <Badge variant={priorityBadgeVariant(row.priority)}>{row.priority}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="info">{row.status}</Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+
+            <div className="space-y-3 p-4 md:hidden">
+              {queueRows.map((row, i) => (
+                <motion.div
+                  key={row.token}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.03 }}
+                  className={cn(
+                    "rounded-xl border p-4",
+                    i === 0 && !nowServing ? "border-blue-200 bg-blue-50/50" : "border-slate-100 bg-white"
+                  )}
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-lg font-bold text-blue-600">{row.token}</p>
+                    <Badge variant={priorityBadgeVariant(row.priority)}>{row.priority}</Badge>
+                  </div>
+                  <p className="mt-1 font-medium text-slate-800">{row.name}</p>
+                  <p className="text-sm text-slate-500">{row.ageOrPhone}</p>
+                </motion.div>
+              ))}
+            </div>
+          </>
+        )}
+      </Card>
+
+      <ConfirmModal
+        open={skipConfirm}
+        onClose={() => setSkipConfirm(false)}
+        onConfirm={() => complete("SKIPPED")}
+        title="Skip Patient?"
+        description="This will mark the current patient as skipped and move to the next in queue."
+        confirmLabel="Skip Patient"
+        loading={actionLoading}
+      />
     </div>
   );
 }
