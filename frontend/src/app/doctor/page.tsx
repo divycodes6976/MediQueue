@@ -326,7 +326,7 @@ export default function DoctorPage() {
                 <p className="mt-2 text-xl font-semibold tracking-[-0.015em] text-slate-800">
                   {nowServingDisplay?.name ?? "No patient currently being served"}
                 </p>
-                {nowServing && nowServingDisplay?.ageOrPhone !== "—" && (
+                {nowServing && nowServingDisplay && nowServingDisplay.ageOrPhone !== "—" && (
                   <p className="mt-1 text-sm text-slate-500">{nowServingDisplay.ageOrPhone}</p>
                 )}
                 {nowServing && (
