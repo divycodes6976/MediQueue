@@ -40,6 +40,7 @@ export async function loginWithEmailPassword(email: string, password: string) {
 
   const rows = await db
     .select({
+      
       id: users.id,
       name: users.name,
       email: users.email,

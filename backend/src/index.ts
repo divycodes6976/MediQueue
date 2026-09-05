@@ -54,6 +54,10 @@ app.get("/setup-db", async (_req, res) => {
   }
 });
 
+app.get("/test", (req, res) => {
+  res.json({ message: "MediQueue backend deployed correctly" });
+});
+
 app.use("/auth", authRoutes);
 app.use("/search", searchRoutes);
 app.use("/patient", patientRoutes);
