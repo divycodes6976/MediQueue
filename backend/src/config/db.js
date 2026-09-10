@@ -23,6 +23,7 @@ async function query(text, params = [], client) {
     const result = await (client ?? pool).query(text, params);
     return result.rows;
 }
+
 async function withTransaction(fn) {
     const client = await pool.connect();
     try {
