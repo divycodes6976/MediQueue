@@ -25,7 +25,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { normalizeQueuePayload, type QueueToken } from "@/lib/queue";
-import { API_BASE } from "@/lib/api";
+import { streamUrl } from "@/lib/api";
 import { DEPARTMENTS } from "@/lib/constants";
 import { cn } from "@/lib/cn";
 
@@ -82,9 +82,7 @@ export default function DisplayPage() {
     setError(null);
     setSseStatus("connecting");
 
-    const es = new EventSource(
-      `${API_BASE}/queue/stream/${encodeURIComponent(selectedDepartment)}`
-    );
+    const es = new EventSource(streamUrl(selectedDepartment));
     eventSourceRef.current = es;
 
     es.onopen = () => setSseStatus("open");

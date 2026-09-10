@@ -15,7 +15,7 @@ import {
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { Loader } from "@/components/ui/Loader";
-import { API_BASE } from "@/lib/api";
+import { api, streamUrl, trackUrl } from "@/lib/api";
 import { DEPT_LABELS } from "@/lib/constants";
 import { getWaitingPosition, normalizeQueuePayload, type QueueToken } from "@/lib/queue";
 import { cn } from "@/lib/cn";
@@ -61,9 +61,7 @@ export default function TrackTokenPage() {
 
     async function load() {
       try {
-        const { data } = await axios.get<TrackInfo>(
-          `${API_BASE}/token/track/${encodeURIComponent(tokenParam)}`
-        );
+        const { data } = await api.get<TrackInfo>(trackUrl(tokenParam));
         if (!cancelled) setTrackInfo(data);
       } catch (e) {
         if (cancelled) return;
@@ -93,7 +91,7 @@ export default function TrackTokenPage() {
     }
 
     setSseStatus("connecting");
-    const es = new EventSource(`${API_BASE}/queue/stream/${encodeURIComponent(department)}`);
+    const es = new EventSource(streamUrl(department));
     eventSourceRef.current = es;
 
     es.onopen = () => setSseStatus("open");

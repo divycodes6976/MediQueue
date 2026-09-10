@@ -1,22 +1,19 @@
 import axios from "axios";
 
-export const API_BASE = (
-  process.env.NEXT_PUBLIC_API_URL?.trim() || "http://localhost:3001"
-).replace(/\/$/, "");
-
-export const AUTH_TOKEN_KEY = "mediqueue_token";
-export const AUTH_USER_KEY = "mediqueue_user";
-
+/** Same-origin /proxy rewrite → backend, so Set-Cookie Path=/ is stored on this app. */
 export const api = axios.create({
-  baseURL: API_BASE,
+  baseURL: "/proxy",
+  withCredentials: true,
 });
 
-api.interceptors.request.use((config) => {
-  if (typeof window !== "undefined") {
-    const token = localStorage.getItem(AUTH_TOKEN_KEY);
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-  }
-  return config;
-});
+export function streamUrl(department: string) {
+  return `/proxy/queue/stream/${encodeURIComponent(department)}`;
+}
+
+export function trackUrl(tokenNumber: string) {
+  return `/token/track/${encodeURIComponent(tokenNumber)}`;
+}
+
+export function waitingUrl(department: string) {
+  return `/queue/waiting/${encodeURIComponent(department)}`;
+}

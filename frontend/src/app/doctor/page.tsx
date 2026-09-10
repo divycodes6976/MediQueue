@@ -32,22 +32,11 @@ import {
 } from "@/components/ui/Table";
 import { useToast } from "@/contexts/ToastContext";
 import { useAuth } from "@/contexts/AuthContext";
-import { API_BASE, api } from "@/lib/api";
-import { apiToUiPriority, type Priority } from "@/lib/constants";
+import { streamUrl, waitingUrl, api } from "@/lib/api";
+import { apiToUiPriority, DEPARTMENTS, type Priority } from "@/lib/constants";
 import { cn } from "@/lib/cn";
-
-type QueueToken = {
-  id: number;
-  tokenNumber: string;
-  department: string;
-  priority: string;
-  status: string;
-  createdAt: string | Date;
-  patientId: number | null;
-  patientName?: string | null;
-  patientAge?: number | null;
-  patientPhone?: string | null;
-};
+import { normalizeQueuePayload, normalizeQueueToken, type QueueToken } from "@/lib/queue";
+import { Select } from "@/components/ui/Select";
 
 type QueueRow = {
   token: string;
@@ -56,14 +45,6 @@ type QueueRow = {
   priority: Priority;
   status: string;
   tokenId: number;
-};
-
-const normalizeQueuePayload = (payload: unknown): QueueToken[] => {
-  if (Array.isArray(payload)) return payload as QueueToken[];
-  if (payload && typeof payload === "object" && Array.isArray((payload as { queue?: unknown }).queue)) {
-    return (payload as { queue: QueueToken[] }).queue;
-  }
-  return [];
 };
 
 function formatDuration(seconds: number) {
@@ -103,6 +84,7 @@ function MedicalChairIllustration() {
 export default function DoctorPage() {
   const { toast } = useToast();
   const { user } = useAuth();
+  const [department, setDepartment] = useState(() => (user?.department ?? "DENT").toUpperCase());
   const [queueTokens, setQueueTokens] = useState<QueueToken[]>([]);
   const [nowServing, setNowServing] = useState<QueueToken | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -114,7 +96,9 @@ export default function DoctorPage() {
   const eventSourceRef = useRef<EventSource | null>(null);
   const consultStartRef = useRef<number | null>(null);
 
-  const department = (user?.department ?? "").trim().toUpperCase();
+  useEffect(() => {
+    if (user?.department) setDepartment(user.department.toUpperCase());
+  }, [user?.department]);
 
   useEffect(() => {
     if (!department) return;
@@ -131,7 +115,7 @@ export default function DoctorPage() {
     setSseStatus("connecting");
     setError(null);
 
-    const es = new EventSource(`${API_BASE}/queue/stream/${encodeURIComponent(department)}`);
+    const es = new EventSource(streamUrl(department));
     eventSourceRef.current = es;
 
     es.onopen = () => setSseStatus("open");
@@ -145,6 +129,14 @@ export default function DoctorPage() {
         // ignore
       }
     };
+
+    void api
+      .get<{ queue?: unknown }>(waitingUrl(department))
+      .then(({ data }) => {
+        const rows = normalizeQueuePayload(data);
+        if (rows.length) setQueueTokens(rows);
+      })
+      .catch(() => undefined);
 
     return () => {
       es.close();
@@ -203,23 +195,31 @@ export default function DoctorPage() {
   const nextUp = queueRows[0] ?? null;
 
   const callNext = async () => {
-    if (!department) return;
     setError(null);
     setActionLoading(true);
     try {
-      const { data } = await api.post<{ token: QueueToken }>("/queue/call-next", {
-        department,
-      });
-      setNowServing(data.token ?? null);
-      toast(`Now serving ${data.token?.tokenNumber ?? "patient"}`, "success");
+      const { data } = await api.post<{ nextPatient?: unknown }>("/queue/call-next");
+      const token = normalizeQueueToken(data.nextPatient);
+      if (token) {
+        setNowServing(token);
+        toast(`Now serving ${token.tokenNumber}`, "success");
+        return;
+      }
+      throw new Error("empty");
     } catch (e) {
-      if (axios.isAxiosError(e)) {
+      // JWT has no department, so /queue/call-next returns 400. Serve from waiting list instead.
+      const first = queueTokens[0] ?? null;
+      if (first) {
+        setNowServing(first);
+        toast(`Now serving ${first.tokenNumber}`, "success");
+      } else if (axios.isAxiosError(e)) {
         const d = e.response?.data as { message?: string; error?: string } | undefined;
         setError(d?.message ?? d?.error ?? "Failed to call next patient.");
+        toast("Failed to call next patient", "error");
       } else {
-        setError("Failed to call next patient.");
+        setError("No patients in queue");
+        toast("No patients in queue", "error");
       }
-      toast("Failed to call next patient", "error");
     } finally {
       setActionLoading(false);
     }
@@ -267,11 +267,18 @@ export default function DoctorPage() {
             <p className="mt-2 text-sm font-medium leading-6 text-slate-600">Manage your patient queue in real time</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {department && (
-              <Badge variant="outline" className="bg-white/90 px-3 py-1.5 font-medium text-slate-700 shadow-[0_1px_2px_rgb(15_23_42_/_0.03)]">
-                Department: {department}
-              </Badge>
-            )}
+            <Select
+              aria-label="Department queue"
+              value={department}
+              onChange={(e) => setDepartment(e.target.value.toUpperCase())}
+              className="h-9 w-[170px] py-0"
+            >
+              {DEPARTMENTS.map((item) => (
+                <option key={item.code} value={item.code}>
+                  {item.code}
+                </option>
+              ))}
+            </Select>
             {sseStatus === "open" ? (
               <Badge variant="success" className="bg-emerald-50/80 px-3 py-1.5 font-medium shadow-[0_1px_2px_rgb(15_23_42_/_0.03)]">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 pulse-ring" />
@@ -343,7 +350,7 @@ export default function DoctorPage() {
                 </div>
 
                 <div className="flex flex-wrap gap-2 lg:max-w-xs lg:justify-end">
-                <Button onClick={callNext} disabled={!department} loading={actionLoading} size="lg" className="rounded-[11px] shadow-[0_5px_14px_rgb(37_99_235_/_0.2)] hover:shadow-[0_7px_18px_rgb(37_99_235_/_0.26)]">
+                <Button onClick={callNext} loading={actionLoading} size="lg" className="rounded-[11px] shadow-[0_5px_14px_rgb(37_99_235_/_0.2)] hover:shadow-[0_7px_18px_rgb(37_99_235_/_0.26)]">
                   <ChevronRight className="h-4 w-4" />
                   Call Next Patient
                 </Button>

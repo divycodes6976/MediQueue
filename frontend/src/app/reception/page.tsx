@@ -118,7 +118,7 @@ export default function ReceptionPage() {
         source: "ai" | "rules";
         emergencyWarning: boolean;
         seniorHint: boolean;
-      }>("/patient/suggest", {
+      }>("/patient/triage-suggest", {
         chiefComplaint: complaint,
         age: parsedAge,
       });
@@ -180,11 +180,20 @@ export default function ReceptionPage() {
         priority: priorityToApi(formData.priority),
       });
 
+      const rawToken = data.token as { tokenNumber?: string; token_number?: string; priority?: string } | undefined;
+      const tokenNumber = rawToken?.tokenNumber ?? rawToken?.token_number;
+      const patientName = data.patient?.name?.trim() || formData.name.trim();
+      if (!tokenNumber) {
+        setSubmitError("Token was not returned by the server. Try again.");
+        toast("Could not issue token", "error");
+        return;
+      }
+
       const newToken: Token = {
-        code: data.token.tokenNumber,
-        name: data.patient.name,
+        code: tokenNumber,
+        name: patientName,
         department: formData.department,
-        priority: apiToUiPriority(data.token.priority),
+        priority: apiToUiPriority(rawToken?.priority ?? "NORMAL"),
       };
 
       setTokens((prev) => [...prev, newToken]);

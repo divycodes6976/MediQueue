@@ -65,7 +65,7 @@ export default function SignupPage() {
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-blue-700">MediQueue workspace</p>
           <h1 className="text-3xl font-semibold tracking-[-0.035em] text-slate-900">Create staff account</h1>
           <p className="mt-2 text-sm text-slate-500">
-            Sign up as reception or doctor. Admin accounts are created by an existing admin.
+            Sign up as reception or doctor.
           </p>
         </div>
 

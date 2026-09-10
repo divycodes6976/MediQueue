@@ -13,7 +13,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { homeForRole } from "@/lib/auth";
 
 const DEMO_ACCOUNTS = [
-  { role: "Admin", email: "admin@mediqueue.local" },
   { role: "Reception", email: "reception@mediqueue.local" },
   { role: "Doctor (Dental)", email: "rohan@mediqueue.local" },
 ];
@@ -60,7 +59,7 @@ export default function LoginPage() {
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-blue-700">MediQueue workspace</p>
           <h1 className="text-3xl font-semibold tracking-[-0.035em] text-slate-900">Staff sign in</h1>
           <p className="mt-2 text-sm text-slate-500">
-            Role-based access for reception, doctors, and admin.
+            Role-based access for reception and doctors.
           </p>
         </div>
 

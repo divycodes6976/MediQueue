@@ -1,34 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import {
-  Activity,
-  BarChart3,
-  Building2,
-  LayoutDashboard,
-  Stethoscope,
-  UserPlus,
-  Users,
-} from "lucide-react";
+import { Activity, UserPlus, Users } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useAuth } from "@/contexts/AuthContext";
 import { ROLE_LABEL, type AppRole } from "@/lib/auth";
 
 const NAV_BY_ROLE: Record<
   AppRole,
-  { href: string; label: string; icon: typeof LayoutDashboard; hash?: string }[]
+  { href: string; label: string; icon: typeof UserPlus }[]
 > = {
   reception: [{ href: "/reception", label: "Register Patient", icon: UserPlus }],
   doctor: [{ href: "/doctor", label: "My Queue", icon: Users }],
-  admin: [
-    { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
-    { href: "/admin", label: "Staff", icon: Stethoscope, hash: "doctors" },
-    { href: "/admin", label: "Departments", icon: Building2, hash: "departments" },
-    { href: "/admin", label: "Analytics", icon: BarChart3, hash: "analytics" },
-  ],
 };
 
 type SidebarProps = {
@@ -39,22 +24,9 @@ type SidebarProps = {
 export function Sidebar({ collapsed, onNavigate }: SidebarProps) {
   const pathname = usePathname();
   const { user } = useAuth();
-  const [hash, setHash] = useState("");
   const items = user ? NAV_BY_ROLE[user.role] : [];
 
-  useEffect(() => {
-    const sync = () => setHash(window.location.hash.replace("#", ""));
-    sync();
-    window.addEventListener("hashchange", sync);
-    return () => window.removeEventListener("hashchange", sync);
-  }, [pathname]);
-
-  const isActive = (href: string, itemHash?: string) => {
-    if (pathname !== href && !pathname.startsWith(`${href}/`)) return false;
-    if (itemHash) return hash === itemHash;
-    if (href === "/admin") return !hash;
-    return true;
-  };
+  const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
   return (
     <aside
@@ -79,19 +51,14 @@ export function Sidebar({ collapsed, onNavigate }: SidebarProps) {
 
       <nav className="flex-1 space-y-1 overflow-y-auto p-3" aria-label="Main navigation">
         {items.map((item) => {
-          const active = isActive(item.href, item.hash);
+          const active = isActive(item.href);
           const Icon = item.icon;
-          const linkHref = item.hash ? `${item.href}#${item.hash}` : item.href;
 
           return (
             <Link
-              key={`${item.label}-${linkHref}`}
-              href={linkHref}
-              onClick={() => {
-                if (!item.hash) setHash("");
-                else setHash(item.hash);
-                onNavigate?.();
-              }}
+              key={item.href}
+              href={item.href}
+              onClick={() => onNavigate?.()}
               className={cn(
                 "group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200",
                 active
@@ -118,7 +85,7 @@ export function Sidebar({ collapsed, onNavigate }: SidebarProps) {
       {!collapsed && user && (
         <div className="border-t border-slate-100 p-4">
           <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3">
-            <p className="text-xs font-semibold text-slate-800">{user.name}</p>
+            <p className="text-xs font-semibold text-slate-800">{user.name ?? ROLE_LABEL[user.role]}</p>
             <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
               {ROLE_LABEL[user.role]}
               {user.department ? ` · ${user.department}` : ""}
