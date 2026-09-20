@@ -31,18 +31,18 @@ const registerPatientFlow = async (name, age, phone, department, priority, chief
     }
 
     const result = await withTransaction(async (tx) => {
-        const patientResponse = await createPatient(
-            { body: { name: normalizedName, age: normalizedAge, phone: normalizedPhone } },
-            { status: () => ({ json: () => ({}) }) }
+        const patient = await createPatient(
+            { name: normalizedName, age: normalizedAge, phone: normalizedPhone },
+            tx
         );
-
-        const patient = patientResponse?.body ?? patientResponse;
-        const token = await createToken(patient.id, normalizedDepartment, normalizedPriority);
-        await notifyQueueUpdate(normalizedDepartment);
-
+        if (!patient?.id) {
+            throw new Error("Failed to create patient");
+        }
+        const token = await createToken(patient.id, normalizedDepartment, normalizedPriority, tx);
         return { patient, token };
     });
 
+    await notifyQueueUpdate(normalizedDepartment);
     return result;
 };
 

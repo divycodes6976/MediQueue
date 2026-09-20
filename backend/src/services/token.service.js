@@ -2,19 +2,24 @@ const { query } = require("../config/db");
 
 
 
-const createToken = async (patientId, department, priority) => {
+const createToken = async (patientId, department, priority, client) => {
 
     const normalizedDepartment = department.trim().toUpperCase();
     const normalizedPriority = priority.trim().toUpperCase();
 
     // 1. Last token find karo
+    if (patientId == null || Number.isNaN(Number(patientId))) {
+        throw new Error("patientId is required to create a token");
+    }
+
     const lastToken = await query(
         `SELECT token_number AS "tokenNumber"
          FROM tokens
          WHERE department = $1
          ORDER BY id DESC
          LIMIT 1`,
-        [normalizedDepartment]
+        [normalizedDepartment],
+        client
     );
 
     // 2. Next number
@@ -48,10 +53,11 @@ const createToken = async (patientId, department, priority) => {
            created_at AS "createdAt"`,
         [
             tokenNumber,
-            patientId,
+            Number(patientId),
             normalizedDepartment,
             normalizedPriority
-        ]
+        ],
+        client
     );
 
     // 5. Created token return karo
