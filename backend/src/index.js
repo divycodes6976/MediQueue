@@ -18,7 +18,27 @@ if (!process.stdin.isTTY) {
 }
 
 const app = express();
-app.use(cors());
+app.set("trust proxy", 1);
+
+const extraOrigins = (process.env.FRONTEND_ORIGIN || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) return callback(null, true);
+      const allowed =
+        extraOrigins.includes(origin) ||
+        origin.startsWith("http://localhost:") ||
+        origin.startsWith("http://127.0.0.1:") ||
+        /^https:\/\/[\w.-]+\.vercel\.app$/.test(origin);
+      callback(null, allowed);
+    },
+    credentials: true,
+  })
+);
 app.use(express.json());
 app.use(cookieParser());
 

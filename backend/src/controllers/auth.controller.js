@@ -4,6 +4,7 @@ const {loginwithEmailAndPassword}= require("../services/auth.service")
 const {createUser}= require("../services/user.service")
  const dotenv = require("dotenv");
 const jwt =require("jsonwebtoken")
+const { authCookieOptions } = require("../utils/authCookie");
 dotenv.config();
 
 const login = async (req, res) => {
@@ -53,10 +54,7 @@ const signup = async (req, res) => {
             { expiresIn: "1h" }
         );
 
-        res.cookie("token", token, {
-            httpOnly: true,
-            maxAge: 24 * 60 * 60 * 1000,
-        });
+        res.cookie("token", token, authCookieOptions());
           
        return res.status(201).json({ message: "User created successfully", user });
 

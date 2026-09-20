@@ -1,6 +1,7 @@
 const { query } = require("../config/db");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const { authCookieOptions } = require("../utils/authCookie");
 
 async function hashPassword(password) {
   return bcrypt.hash(password, 10);
@@ -30,10 +31,7 @@ async function loginwithEmailAndPassword(req,res) {
     { expiresIn: "1h" }
   );
 
-  res.cookie("token", token, {
-    httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000,
-  });
+  res.cookie("token", token, authCookieOptions());
 
   res.status(200).json({ message: 'Login successful', token });
 
