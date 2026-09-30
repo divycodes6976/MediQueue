@@ -1,425 +1,215 @@
-# MediQueue — Hospital OPD Queue Management System
+# 🏥 MediQueue — Hospital OPD Queue Management System
 
-> **Interview-ready project guide** — Backend-first deep dive with architecture, flows, and talking points.
+A modern, real-time Outpatient Department (OPD) queue management system designed to eliminate physical waiting lines, streamline patient triage with AI assistance, and synchronize doctor consoles and waiting area displays in real time.
 
 ---
 
-## Project Overview
+## 📌 Project Overview
 
-**MediQueue** is a **real-time hospital queue management system**.
+In traditional hospital Outpatient Departments, crowded waiting areas, manual paper tokens, and lack of live queue visibility cause frustration for both patients and healthcare staff. Emergency cases frequently get stuck behind routine checkups, and receptionists can inadvertently route patients to the incorrect specialist department.
 
-It solves the problem of **long waiting lines** and **manual queue handling** in hospitals.
+**MediQueue** digitizes and automates the entire OPD journey:
+- **Smart Reception Registration**: Registers patients and leverages Google Gemini AI to analyze symptoms and automatically suggest the correct medical department and priority tier.
+- **Priority-Weighted Queue**: Automatically prioritizes emergency cases and senior citizens over routine visits, while preserving first-come, first-served order within each tier.
+- **Concurrency-Safe Doctor Console**: Doctors can call the next patient safely without race conditions, using PostgreSQL advisory locks and atomic transactions.
+- **Zero-Latency Live Display**: Waiting room screens automatically update in real time via Redis Pub/Sub and Server-Sent Events (SSE)—no page refreshes needed.
+- **Self-Service Token Tracking**: Patients can track their live position in queue from their mobile phones.
 
-### 4 Modules
+---
 
-| # | Module | What it does |
+## 🚀 Key Features & Modules
+
+| Module | Route | Description |
 |---|---|---|
-| 1 | **Reception dashboard** | Register patients and generate tokens |
-| 2 | **Doctor dashboard** | Call next, complete, or skip patients |
-| 3 | **Admin panel** | Dashboard stats and staff overview |
-| 4 | **Live display board** | Shows the live department queue in real time |
+| **Live Display Board** | `/display` | Real-time queue board designed for waiting room TV screens, separated by department. |
+| **Reception Dashboard** | `/reception` | Patient check-in, AI symptom triage suggestion, and priority token generation. |
+| **Doctor Console** | `/doctor` | Department queue view, concurrency-safe "Call Next", "Mark Done", and "Skip" controls. |
+| **Patient Tracker** | `/track` / `/track/:token` | Mobile-friendly token tracking showing current status and patients ahead. |
+| **Staff Authentication** | `/login` / `/signup` | Secure credential-based access for hospital staff and administrators. |
 
-- **Reception** can register patients and generate tokens.
-- **Doctors** can call next, complete, or skip patients.
-- The **display board** shows the live department queue in real time.
+---
 
-### Flow (Simple)
+## 🔄 System Flow
+
+```
+Patient Arrival ➡️ Reception (AI Triage) ➡️ Token Issued ➡️ Live Queue Display (SSE)
+                                                                    ⬇️
+Patient Treated ⬅️ Doctor Console ("Call Next" with DB Lock) ⬅️ Priority Queue
+```
 
 ![MediQueue main flow](docs/diagrams/flow-simple.png)
 
-### Real-Time Synchronization
+### Real-Time Synchronization Architecture
 
-For real-time synchronization, I used:
-
-- **Redis Pub/Sub**
-- **Server-Sent Events (SSE)**
-
-Whenever queue data changes:
+Whenever queue data changes (a patient is registered, called, or marked completed), the backend publishes an event to Redis, which pushes instant updates to all connected browser displays via Server-Sent Events (SSE).
 
 ```
-Backend → Redis → SSE → all connected clients update instantly
+Backend API ──▶ Redis Pub/Sub ──▶ SSE Bridge ──▶ Connected Displays & Consoles
 ```
 
 ![Real-time synchronization flow](docs/diagrams/realtime-sync.svg)
 
-### Race Condition Handling
+### Concurrency Safety & Fair Queuing
 
-I handled race conditions using **Postgres transactions** and **advisory locks**, so two staff members cannot:
+- **Advisory Locks**: PostgreSQL transactions and table-level advisory locks prevent race conditions when multiple doctors in the same department attempt to call the next patient simultaneously.
+- **Multi-Tier Priority Sorting**:
+  1. `EMERGENCY` (Highest priority)
+  2. `SENIOR` (Age 60+)
+  3. `NORMAL` (Standard checkup)
+  *(Within each tier, patients are served first-come, first-served based on arrival timestamp).*
+- **AI-Assisted Triage with Fallback**: Receptionists input patient symptoms in natural language (English or Hindi). Gemini AI suggests the target department (`GEN`, `CARD`, `ORTH`, `NEUR`, `DENT`) and priority. If the AI service is unavailable or offline, an automated regex rule-based engine takes over seamlessly.
 
-- Generate **duplicate tokens**
-- Call the **same patient** simultaneously
+---
 
-### AI-Assisted Triage (Unique Feature)
-
-One unique feature is **AI-assisted triage**.
-
-Receptionists can enter patient symptoms, and **Gemini AI** suggests:
-
-- **Department** (DENT, ORTH, CARD, NEUR, GEN)
-- **Priority** (EMERGENCY, SENIOR, NORMAL)
-
-This helps reduce manual mistakes and speeds up registration. If Gemini is unavailable, a **rule-based fallback** takes over automatically.
-
-### Tech Stack
+## 🛠️ Tech Stack
 
 | Layer | Technologies |
 |---|---|
-| **Frontend** | Next.js, Tailwind CSS |
-| **Backend** | Node.js, Express, TypeScript |
-| **Database** | PostgreSQL, Drizzle ORM |
-| **Real-time** | Redis |
-| **AI** | Gemini API |
+| **Frontend** | React 19, Vite, Tailwind CSS, React Router, Lucide Icons, Framer Motion |
+| **Backend** | Node.js, Express.js (REST API) |
+| **Database & ORM** | PostgreSQL, Drizzle ORM |
+| **Real-Time Engine** | Redis Pub/Sub, Server-Sent Events (SSE) |
+| **AI Integration** | Google Gemini API (`@google/genai`) with rule-based fallback |
+| **Validation** | Zod |
 
 ---
 
-## H — Hook (What is this project?)
+## 💻 How to Use & Getting Started
 
-**MediQueue** is a digital **Out Patient Department (OPD) queue management system** for hospitals.
+### Prerequisites
 
-In real life, when you visit a hospital:
-1. Reception takes your **name, age, and problem**
-2. You get a **token number** (e.g. `DENT-003`)
-3. A **display board** shows the waiting queue
-4. The doctor **calls the next patient**
-5. You can **track your token** — *"How many people are ahead of me?"*
-
-This project replaces manual paper tokens with a full-stack software system — **reception, doctor, display board, admin dashboard, and patient tracking** — all connected in real time.
-
-### 30-Second Elevator Pitch
-
-> *"I built MediQueue — a hospital queue system where reception registers patients and gets AI-suggested department/priority, tokens are generated with priority-based ordering (Emergency > Senior > Normal), doctors call the next patient safely with database locks, and display boards update live via Redis pub/sub and Server-Sent Events — all on Node.js, PostgreSQL, and Next.js."*
+Ensure you have the following installed on your machine:
+- [Node.js](https://nodejs.org/) (v18 or higher)
+- [PostgreSQL](https://www.postgresql.org/) (running locally or cloud instance)
+- [Redis](https://redis.io/) (running locally or cloud instance e.g., Upstash / Aiven)
+- Git
 
 ---
 
-## E — Explain (The Problem)
+### Step 1: Clone the Repository
 
-| Real Hospital Problem | Why It Hurts |
-|---|---|
-| Manual paper tokens | Confusion, lost tokens, no tracking |
-| No priority system | Emergency patients wait behind normal cases |
-| Display board updated manually | Staff overhead, stale information |
-| Reception picks wrong department | Patient sent to wrong OPD queue |
-| Patient has no visibility | *"Kitna wait karna padega?"* — nobody knows |
-
-### Who Uses the System?
-
-| Role | What They Do |
-|---|---|
-| **Reception** | Register patient, AI triage suggestion, issue token |
-| **Doctor** | Call next patient, mark DONE or SKIPPED |
-| **Display Board** | Live waiting queue on screen (no refresh) |
-| **Patient** | Track token position in queue |
-| **Admin** | Dashboard stats, staff overview |
-
----
-
-## R — Resolve (How It Works)
-
-### Tech Stack
-
-```
-Frontend (Next.js)  →  Backend (Express + TypeScript)  →  PostgreSQL
-                              ↓
-                           Redis (pub/sub)
-                              ↓
-                         SSE (live updates)
-                              ↓
-                         Gemini AI (triage)
+```bash
+git clone https://github.com/your-username/MediQueue.git
+cd MediQueue
 ```
 
-| Technology | Purpose |
-|---|---|
-| **Node.js + Express** | REST API server |
-| **TypeScript** | Type-safe backend code |
-| **PostgreSQL** | Patients, tokens, users, logs |
-| **Drizzle ORM** | Type-safe SQL queries |
-| **Redis** | Pub/sub for queue update broadcasts |
-| **SSE (Server-Sent Events)** | Live queue updates to browsers |
-| **Google Gemini** | Suggest department & priority from complaint |
-| **Zod** | Validate AI JSON responses |
-| **Next.js** | Frontend (reception, doctor, display, admin, track) |
-| **Tailwind CSS** | Frontend styling |
+---
 
-### System Architecture
+### Step 2: Backend Setup
 
-![System architecture](docs/diagrams/system-architecture.svg)
+1. **Navigate to the backend directory**:
+   ```bash
+   cd backend
+   ```
 
-### Backend Layered Architecture
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
 
-```
-Routes  →  Controllers  →  Application Flows  →  Services  →  Database
-```
+3. **Configure Environment Variables**:
+   Create a `.env` file in the `backend/` directory (you can copy `.env.sample`):
+   ```env
+   PORT=3001
+   DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mediqueue
+   REDIS_URL=redis://localhost:6379
 
-| Layer | Responsibility | Example |
-|---|---|---|
-| **Routes** | Define URLs & HTTP methods | `patient.routes.ts` |
-| **Controllers** | Parse request, send response | `patient.controller.ts` |
-| **Application Flows** | Orchestrate business steps | `registerpatientflow.ts` |
-| **Services** | DB ops & core logic | `queue.service.ts` |
-| **Config** | DB, Redis, schema setup | `db.ts`, `schema.ts` |
+   # Google Gemini (Optional - rule-based fallback active if omitted)
+   GEMINI_API_KEY=your_gemini_api_key_here
+   GEMINI_MODEL=gemini-2.0-flash
+   ```
 
-### Database Schema
+4. **Seed the Database**:
+   Populate initial departments and demo staff accounts:
+   ```bash
+   npm run seed
+   ```
 
-![Database schema](docs/diagrams/database-schema.svg)
-
-**Departments:** `DENT` · `ORTH` · `CARD` · `NEUR` · `GEN`
-
-**Token Status Lifecycle:**
-
-![Token status lifecycle](docs/diagrams/token-lifecycle.svg)
-
-**Priority Order (highest first):**
-
-![Priority order](docs/diagrams/priority-order.svg)
+5. **Start the Backend Server**:
+   ```bash
+   npm run dev
+   ```
+   *The backend REST API will start on `http://localhost:3001`.*
 
 ---
 
-### API Endpoints
+### Step 3: Frontend Setup
 
-#### Patient — `/patient`
+1. **Open a new terminal and navigate to the frontend directory**:
+   ```bash
+   cd frontend
+   ```
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/patient/suggest` | AI suggests department & priority from complaint |
-| `POST` | `/patient/register` | Register patient + generate token |
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
 
-#### Token — `/token`
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/token/track/:tokenNumber` | Token status + position in queue |
-| `POST` | `/token/generate` | Generate token for existing patient |
-
-#### Queue — `/queue`
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/queue/waiting/:department` | Get waiting queue for department |
-| `POST` | `/queue/call-next` | Doctor calls next patient |
-| `POST` | `/queue/complete` | Mark token DONE or SKIPPED |
-| `GET` | `/queue/stream/:department` | **Live SSE stream** for display board |
-
-#### Admin — `/admin`
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/admin/stats` | Dashboard statistics |
-| `GET` | `/admin/users` | List staff users |
+3. **Start the Frontend Development Server**:
+   ```bash
+   npm run dev
+   ```
+   *The frontend application will be accessible at `http://localhost:3000`.*
 
 ---
 
-### Core Flow 1 — Patient Registration
+### Step 4: Using the Application
 
-![Patient registration flow](docs/diagrams/patient-registration.svg)
+1. **Live Display Board (`http://localhost:3000/display`)**:
+   - Open this on any screen or TV in the waiting area.
+   - Displays the current token being served and upcoming tokens organized by department. Updates live without refreshing.
 
-**Key file:** `backend/src/application/patient/registerpatientflow.ts`
+2. **Reception Desk (`http://localhost:3000/reception`)**:
+   - Enter patient name, age, gender, and chief complaints / symptoms.
+   - Click **Suggest** to let AI analyze the symptoms and recommend the appropriate department and priority tier.
+   - Click **Generate Token** to register the patient. A token (e.g., `CARD-001`, `ORTH-002`) is generated and instantly broadcast to the display board.
 
-**Interview point:** Patient and token are created in a **single database transaction** — if token generation fails, the patient insert is rolled back too.
+3. **Doctor Console (`http://localhost:3000/doctor`)**:
+   - Select your department.
+   - View the live waiting queue sorted by priority.
+   - Click **Call Next** to call the next patient.
+   - When the consultation concludes, click **Complete** or **Skip**.
 
----
-
-### Core Flow 2 — Priority Queue Logic
-
-The queue is **not simple FIFO**. It is a **weighted priority queue**:
-
-![Priority queue logic](docs/diagrams/priority-queue.svg)
-
-**Sorting rules:**
-1. `EMERGENCY` (score 3) — chest pain, breathing difficulty
-2. `SENIOR` (score 2) — age 60+
-3. `NORMAL` (score 1) — everyone else
-4. Same priority → **first come, first served** (`createdAt`)
-
-**Key file:** `backend/src/services/queue.service.ts` → `getQueue()`
+4. **Patient Token Tracking (`http://localhost:3000/track`)**:
+   - Patients enter their token number (e.g., `DENT-001`) to view real-time status, department details, and how many patients are ahead of them.
 
 ---
 
-### Core Flow 3 — Call Next Patient (Concurrency Safe)
-
-![Call next patient flow](docs/diagrams/call-next.svg)
-
-**Interview gold point:** PostgreSQL **advisory lock** prevents race conditions — if two doctors click "Call Next" at the same time, the same patient is never called twice.
-
-**Key file:** `backend/src/services/queue.service.ts` → `callNext()`
-
----
-
-### Core Flow 4 — Real-Time Updates (Redis + SSE)
-
-![Real-time updates flow](docs/diagrams/realtime-updates.svg)
-
-**Why Redis instead of direct SSE broadcast?**
-- Decouples the API from connected clients
-- Supports **multiple server instances** in production
-- Clean pub/sub pattern
-
-**Why SSE instead of WebSocket?**
-- Updates are **one-way** (server → client only)
-- Simpler to implement for display boards
-- Works over standard HTTP
-
-**Key files:**
-- `backend/src/services/queue.service.ts` → `notifyQueueUpdate()`
-- `backend/src/events/queueSubscriber.ts`
-- `backend/src/utils/sseStore.ts`
-- `backend/src/routes/queue.routes.ts` → `GET /stream/:department`
-
----
-
-### Core Flow 5 — AI Triage (Gemini + Rule Fallback)
-
-![AI triage flow](docs/diagrams/ai-triage.svg)
-
-**Example input:**
-```
-"sir mein bahut dard hai, 65 saal ka hoon"
-→ { department: "NEUR", priority: "SENIOR", reason: "..." }
-```
-
-**Fallback rules** (`backend/src/utils/triageRules.ts`):
-- Regex patterns for Hindi + English keywords
-- Emergency override: chest pain, breathless, unconscious
-- Senior override: age ≥ 60
-- Default department: `GEN`
-
-**Interview point:** AI is a **routing assistant**, not a medical diagnosis tool. Rules always override AI for emergency cases.
-
----
-
-### Token Number Generation
-
-```
-Format: {DEPARTMENT}-{NUMBER}
-Examples: DENT-001, CARD-015, ORTH-003
-```
-
-![Token number generation](docs/diagrams/token-generation.svg)
-
-**Key file:** `backend/src/services/token.service.ts`
-
----
-
-### Token Tracking
-
-![Token tracking flow](docs/diagrams/token-tracking.svg)
-
-**Key file:** `backend/src/services/token.lookup.service.ts`
-
----
-
-## O — Outcome (What You Built & Interview Points)
-
-### Project Structure
+## 📂 Project Directory Structure
 
 ```
 MediQueue/
 ├── backend/
-│   └── src/
-│       ├── index.ts                  # Express app entry
-│       ├── config/
-│       │   ├── db.ts                 # PostgreSQL + Drizzle
-│       │   ├── redis.ts              # Redis publisher
-│       │   └── schema.ts             # DB tables
-│       ├── routes/                     # API routes
-│       ├── controllers/                # Request handlers
-│       ├── application/                # Business flow orchestration
-│       │   ├── patient/registerpatientflow.ts
-│       │   └── token/generatetokenflow.ts
-│       ├── services/                   # Core logic
-│       │   ├── queue.service.ts        # Priority queue, call-next
-│       │   ├── token.service.ts        # Token generation
-│       │   ├── token.lookup.service.ts # Token tracking
-│       │   ├── admin.service.ts        # Dashboard stats
-│       │   └── gemini/                 # AI triage
-│       ├── events/
-│       │   └── queueSubscriber.ts      # Redis → SSE bridge
-│       └── utils/
-│           ├── sseStore.ts             # SSE client management
-│           └── triageRules.ts          # Rule-based fallback
-└── frontend/
-    └── src/app/
-        ├── reception/                  # Register patients
-        ├── doctor/                     # Call next, complete
-        ├── display/                    # Live queue board
-        ├── track/[token]/              # Patient token tracker
-        └── admin/                      # Dashboard
+│   ├── src/
+│   │   ├── config/             # Database (Drizzle), Redis, and schema definitions
+│   │   ├── controllers/        # Express route controllers
+│   │   ├── events/             # Redis Pub/Sub subscriber and SSE bridges
+│   │   ├── middleware/         # Auth & error-handling middleware
+│   │   ├── routes/             # REST API endpoints (/patient, /token, /queue, etc.)
+│   │   ├── services/           # Business logic (queue, token generation, AI triage)
+│   │   ├── utils/              # SSE connection store, rule-based triage fallback
+│   │   ├── index.js            # Express application entry point
+│   │   └── seed.js             # Initial database seeder
+│   └── package.json
+│
+├── frontend/
+│   ├── src/
+│   │   ├── components/         # Shared UI components, layout shell, navbar, sidebar
+│   │   ├── contexts/           # Toast context & UI state
+│   │   ├── pages/              # Reception, Doctor, Display, Track, Auth pages
+│   │   ├── App.jsx             # Main routing configuration
+│   │   └── main.jsx            # Application root
+│   ├── vite.config.js          # Vite config with backend proxy
+│   └── package.json
+│
+├── docs/
+│   └── diagrams/               # Visual architecture and flow diagrams
+├── README.md                   # Project documentation
+└── .gitignore                  # Git ignore rules
 ```
 
-### End-to-End User Journey
-
-![End-to-end user journey](docs/diagrams/end-to-end-journey.svg)
-
 ---
 
-### Interview Q&A Cheat Sheet
+## 📄 License
 
-#### Q: What was the most challenging part?
-> Priority queue with concurrency safety. Two doctors could click "Call Next" simultaneously — I used **PostgreSQL advisory locks** inside a transaction so only one call-next succeeds per department at a time.
-
-#### Q: How did you implement real-time updates?
-> When the queue changes, the backend publishes to **Redis**. A subscriber listens and broadcasts to all **SSE-connected clients** (display boards). No polling, no page refresh.
-
-#### Q: Why SSE over WebSocket?
-> Updates are **one-directional** — server pushes queue data to display boards. SSE is simpler, works over HTTP, and is sufficient for this use case.
-
-#### Q: What role does AI play?
-> **Routing assistant only** — not diagnosis. Gemini reads the patient's complaint and suggests department + priority. Emergency keywords in rules **always override** AI output for safety.
-
-#### Q: Where did you use database transactions?
-> - Patient registration (patient + token together)
-> - Token generation (with duplicate check)
-> - Call next (lock + status update)
-> - Complete token (status + log update)
-
-#### Q: How does the priority queue work?
-> Not FIFO — **weighted FIFO**. EMERGENCY (3) > SENIOR (2) > NORMAL (1). Within the same priority, earlier `createdAt` wins.
-
-#### Q: How would you scale this?
-> Redis pub/sub already supports multiple backend instances. `bullmq` is in dependencies for background jobs. JWT/bcrypt packages are ready for auth. Could add read replicas for PostgreSQL.
-
-#### Q: What happens if Gemini API fails?
-> Automatic **fallback to rule-based triage** — regex patterns for Hindi/English symptoms. System never goes down because of AI.
-
----
-
-### Running Locally
-
-```bash
-# Backend
-cd backend
-npm install
-# Set .env: DATABASE_URL, REDIS_URL, GEMINI_API_KEY (optional)
-npm run dev          # starts on port 3001
-npm run seed         # seed demo data
-
-# Frontend
-cd frontend
-npm install
-npm run dev          # starts on port 3000
-```
-
-### Environment Variables
-
-| Variable | Required | Description |
-|---|---|---|
-| `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `REDIS_URL` | No | Defaults to `redis://127.0.0.1:6379` |
-| `GEMINI_API_KEY` | No | Falls back to rule-based triage if missing |
-| `PORT` | No | Backend port, defaults to `3001` |
-
----
-
-### Key Design Decisions Summary
-
-| Decision | Choice | Reason |
-|---|---|---|
-| Queue ordering | Priority + FIFO within tier | Emergency patients must not wait |
-| Concurrency | PostgreSQL advisory lock | Prevent double call-next |
-| Real-time updates | Redis pub/sub + SSE | Scalable, one-way push |
-| AI triage | Gemini + rule fallback | Smart routing with guaranteed uptime |
-| ORM | Drizzle | Type-safe, lightweight, SQL-like |
-| Architecture | Layered (routes → flows → services) | Separation of concerns, testable |
-
----
-
-*Built for learning and interview preparation. Backend-first, production-minded patterns.*
+This project is licensed under the [ISC License](LICENSE).
